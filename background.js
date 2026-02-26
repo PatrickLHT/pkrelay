@@ -13,3 +13,13 @@ const actions = new ActionExecutor();
 
 // --- Alarm handler (relay keepalive & reconnect) ---
 chrome.alarms.onAlarm.addListener((alarm) => relay.handleAlarm(alarm));
+
+// --- Tab manager init ---
+tabMgr.init();
+
+// On relay reconnect, re-announce tabs
+relay.onStateChange = (state) => {
+  if (state === 'connected') {
+    tabMgr.reannounceAll();
+  }
+};
