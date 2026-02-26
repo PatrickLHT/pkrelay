@@ -103,3 +103,42 @@ relay.on('pkrelay.tabs', async (msg) => {
     relay.send({ id, error: String(err.message) });
   }
 });
+
+// --- Popup / internal message passing ---
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === 'getState') {
+    (async () => {
+      const stored = await chrome.storage.local.get(['browserName']);
+      const tabPerms = await perms.getTabPermissions();
+      const attachedTabs = tabMgr.getAttachedTabs();
+      const tabs = tabPerms.map(t => ({
+        ...t,
+        attached: attachedTabs.has(t.tabId)
+      }));
+      sendResponse({
+        connectionState: relay.state,
+        browserName: stored.browserName || 'Browser',
+        relayUrl: `ws://127.0.0.1:${relay.port}/extension`,
+        browserLevel: perms.browserLevel,
+        tabs
+      });
+    })();
+    return true; // async response
+  }
+  if (msg.type === 'setPermission') {
+    perms.setRule(msg.pattern, msg.level);
+    sendResponse({ ok: true });
+  }
+  if (msg.type === 'setBrowserLevel') {
+    perms.setBrowserLevel(msg.level);
+    sendResponse({ ok: true });
+  }
+  if (msg.type === 'toggleTab') {
+    tabMgr.toggleTab(msg.tabId).then(() => sendResponse({ ok: true }));
+    return true; // async response
+  }
+  if (msg.type === 'connect') {
+    relay.connect().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+});

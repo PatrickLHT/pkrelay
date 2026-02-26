@@ -5,10 +5,50 @@
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div id="app">
-    <h1>PKRelay</h1>
-    <p>Permission dashboard — coming soon</p>
+  <header id="header">
+    <div class="header-left">
+      <span class="status-dot" id="statusDot"></span>
+      <strong>PKRelay</strong>
+    </div>
+    <div class="header-right">
+      <span id="connState">Disconnected</span>
+    </div>
+  </header>
+
+  <div class="info-row">
+    <span class="label">Browser:</span>
+    <span id="browserName">Browser</span>
   </div>
+  <div class="info-row">
+    <span class="label">Relay:</span>
+    <span id="relayUrl" class="mono">--</span>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <span>Browser Permission</span>
+      <select id="browserLevel">
+        <option value="per-tab">Per-Tab</option>
+        <option value="full-browser">Full Browser</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-header">
+      <span>Tabs</span>
+      <button id="refreshBtn" class="icon-btn" title="Refresh">&#8635;</button>
+    </div>
+    <div id="tabList" class="tab-list">
+      <div class="empty">Loading...</div>
+    </div>
+  </div>
+
+  <footer>
+    <a href="#" id="settingsLink">Settings</a>
+    <button id="connectBtn" class="btn-sm">Connect</button>
+  </footer>
+
   <script src="popup.js"></script>
 </body>
 </html>
