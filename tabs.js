@@ -8,6 +8,7 @@ export class TabManager {
     this.tabBySession = new Map();    // sessionId -> tabId
     this.childSessionToTab = new Map(); // childSessionId -> tabId
     this.debuggerListening = false;
+    this.onTabChange = null;       // callback(tabId, attached)
   }
 
   setPermissionManager(perms) {
@@ -73,6 +74,7 @@ export class TabManager {
     });
 
     await this.persistState();
+    if (this.onTabChange) this.onTabChange(tabId, true);
     return tabState;
   }
 
@@ -106,6 +108,7 @@ export class TabManager {
     try { await chrome.debugger.detach({ tabId }); } catch {}
 
     await this.persistState();
+    if (this.onTabChange) this.onTabChange(tabId, false);
   }
 
   async toggleTab(tabId) {

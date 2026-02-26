@@ -11,18 +11,68 @@ const perms = new PermissionManager();
 const perception = new PerceptionEngine();
 const actions = new ActionExecutor();
 
+// --- Badge management ---
+const BADGE = {
+  on:         { text: 'ON',  bg: '#22C55E' },
+  off:        { text: '',    bg: '#000000' },
+  connecting: { text: '...', bg: '#F59E0B' },
+  error:      { text: '!',   bg: '#B91C1C' },
+  ask:        { text: '?',   bg: '#3B82F6' }
+};
+
+function setBadge(tabId, state) {
+  const cfg = BADGE[state];
+  if (!cfg) return;
+  const opts = tabId ? { tabId } : {};
+  chrome.action.setBadgeText({ ...opts, text: cfg.text });
+  chrome.action.setBadgeBackgroundColor({ ...opts, color: cfg.bg });
+}
+
+function updateGlobalBadge() {
+  const attached = tabMgr.getAttachedTabs();
+  if (relay.state !== 'connected') {
+    if (relay.state === 'connecting' || relay.state === 'reconnecting') {
+      setBadge(null, 'connecting');
+    } else {
+      setBadge(null, 'error');
+    }
+    return;
+  }
+  if (attached.size > 0) {
+    setBadge(null, 'on');
+  } else {
+    setBadge(null, 'off');
+  }
+}
+
+function updateTabBadge(tabId) {
+  if (perms.hasPendingRequest(tabId)) {
+    setBadge(tabId, 'ask');
+  } else if (tabMgr.isAttached(tabId)) {
+    setBadge(tabId, 'on');
+  } else {
+    setBadge(tabId, 'off');
+  }
+}
+
 // --- Alarm handler (relay keepalive & reconnect) ---
 chrome.alarms.onAlarm.addListener((alarm) => relay.handleAlarm(alarm));
 
 // --- Permission manager init ---
 perms.load();
+perms.onPendingChange = (tabId) => updateTabBadge(tabId);
 
 // --- Tab manager init ---
 tabMgr.setPermissionManager(perms);
+tabMgr.onTabChange = (tabId, attached) => {
+  updateTabBadge(tabId);
+  updateGlobalBadge();
+};
 tabMgr.init();
 
-// On relay reconnect, re-announce tabs
+// On relay state change, update badge and re-announce
 relay.onStateChange = (state) => {
+  updateGlobalBadge();
   if (state === 'connected') {
     tabMgr.reannounceAll();
   }
@@ -32,11 +82,13 @@ relay.onStateChange = (state) => {
 relay.on('pkrelay.permission.grant', (msg) => {
   const { tabId, duration } = msg.params || {};
   perms.resolvePermissionRequest(tabId, true, duration);
+  updateTabBadge(tabId);
 });
 
 relay.on('pkrelay.permission.deny', (msg) => {
   const { tabId } = msg.params || {};
   perms.resolvePermissionRequest(tabId, false);
+  updateTabBadge(tabId);
 });
 
 // --- Perception (snapshot) handler ---

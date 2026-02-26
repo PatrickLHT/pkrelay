@@ -7,6 +7,7 @@ export class PermissionManager {
     this.defaultLevel = 'ask';     // 'none' | 'ask' | 'full'
     this.sessionGrants = new Map(); // tabId -> 'granted' (for "Ask First" session grants)
     this.pendingRequests = new Map(); // tabId -> { resolve, reject }
+    this.onPendingChange = null;     // callback(tabId) when pending state changes
   }
 
   async load() {
@@ -105,6 +106,7 @@ export class PermissionManager {
   requestPermission(tabId) {
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(tabId, { resolve, reject });
+      if (this.onPendingChange) this.onPendingChange(tabId);
     });
   }
 
