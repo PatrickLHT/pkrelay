@@ -11,4 +11,5 @@ const perms = new PermissionManager();
 const perception = new PerceptionEngine();
 const actions = new ActionExecutor();
 
-// Wire up modules — detailed in subsequent tasks
+// --- Alarm handler (relay keepalive & reconnect) ---
+chrome.alarms.onAlarm.addListener((alarm) => relay.handleAlarm(alarm));
