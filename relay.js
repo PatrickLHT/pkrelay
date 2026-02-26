@@ -79,10 +79,29 @@ export class RelayConnection {
       this.setState('connected');
       this.startKeepalive();
       chrome.alarms.clear(RECONNECT_ALARM);
+      await this.announceIdentity();
     } catch {
       this.setState('disconnected');
       this.scheduleReconnect();
     }
+  }
+
+  async announceIdentity() {
+    const stored = await chrome.storage.local.get(['browserName', 'browserId']);
+    let browserId = stored.browserId;
+    if (!browserId) {
+      browserId = `pkrelay-${crypto.randomUUID().slice(0, 8)}`;
+      await chrome.storage.local.set({ browserId });
+    }
+    this.send({
+      method: 'relay.announce',
+      params: {
+        browserName: stored.browserName || 'Browser',
+        browserId,
+        extensionVersion: chrome.runtime.getManifest().version,
+        capabilities: ['snapshot', 'actions', 'screenshot', 'diff', 'permissions']
+      }
+    });
   }
 
   openWebSocket() {

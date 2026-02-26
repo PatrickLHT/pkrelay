@@ -81,3 +81,25 @@ relay.on('pkrelay.screenshot', async (msg) => {
     relay.send({ id, error: String(err.message) });
   }
 });
+
+// --- Tab listing handler ---
+relay.on('pkrelay.tabs', async (msg) => {
+  const { id } = msg;
+  try {
+    const tabPerms = await perms.getTabPermissions();
+    const attachedTabs = tabMgr.getAttachedTabs();
+    const result = tabPerms
+      .filter(t => t.level !== 'none')
+      .map(t => ({
+        tabId: t.tabId,
+        url: t.url,
+        title: t.title,
+        level: t.level,
+        attached: attachedTabs.has(t.tabId),
+        hasPendingRequest: t.hasPendingRequest
+      }));
+    relay.send({ id, result });
+  } catch (err) {
+    relay.send({ id, error: String(err.message) });
+  }
+});
