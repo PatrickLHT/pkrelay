@@ -38,3 +38,28 @@ relay.on('pkrelay.permission.deny', (msg) => {
   const { tabId } = msg.params || {};
   perms.resolvePermissionRequest(tabId, false);
 });
+
+// --- Perception (snapshot) handler ---
+relay.on('pkrelay.snapshot', async (msg) => {
+  const { id, params } = msg;
+  const { tabTarget, diff, elementId, depth } = params || {};
+  const tabId = tabMgr.resolveTab(tabTarget);
+  try {
+    const result = await perception.snapshot(tabId, { diff, elementId, depth });
+    relay.send({ id, result });
+  } catch (err) {
+    relay.send({ id, error: String(err.message) });
+  }
+});
+
+relay.on('pkrelay.screenshot', async (msg) => {
+  const { id, params } = msg;
+  const { tabTarget, elementIndex, format, quality } = params || {};
+  const tabId = tabMgr.resolveTab(tabTarget);
+  try {
+    const result = await perception.takeScreenshot(tabId, { elementIndex, format, quality });
+    relay.send({ id, result });
+  } catch (err) {
+    relay.send({ id, error: String(err.message) });
+  }
+});
