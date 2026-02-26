@@ -52,6 +52,24 @@ relay.on('pkrelay.snapshot', async (msg) => {
   }
 });
 
+// --- Action executor ---
+actions.setPerception(perception);
+
+relay.on('pkrelay.action', async (msg) => {
+  const { id, params } = msg;
+  const { tabTarget, action } = params || {};
+  const tabId = tabMgr.resolveTab(tabTarget);
+  try {
+    const result = await actions.execute(tabId, action);
+    // Auto-include snapshot diff with action result
+    await new Promise(r => setTimeout(r, 100)); // Brief settle time
+    const diff = await perception.snapshot(tabId, { diff: true });
+    relay.send({ id, result: { ...result, snapshot: diff } });
+  } catch (err) {
+    relay.send({ id, error: String(err.message) });
+  }
+});
+
 relay.on('pkrelay.screenshot', async (msg) => {
   const { id, params } = msg;
   const { tabTarget, elementIndex, format, quality } = params || {};
