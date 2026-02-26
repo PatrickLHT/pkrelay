@@ -3,10 +3,15 @@
 export class TabManager {
   constructor(relay) {
     this.relay = relay;
+    this.perms = null;                // Set via setPermissionManager
     this.tabs = new Map();            // tabId -> { state, sessionId, targetId }
     this.tabBySession = new Map();    // sessionId -> tabId
     this.childSessionToTab = new Map(); // childSessionId -> tabId
     this.debuggerListening = false;
+  }
+
+  setPermissionManager(perms) {
+    this.perms = perms;
   }
 
   async init() {
@@ -193,6 +198,29 @@ export class TabManager {
     try {
       const tabId = this.resolveTab(sessionId, cmdParams);
       if (tabId == null) throw new Error(`No attached tab for ${method}`);
+
+      // Permission enforcement
+      if (this.perms) {
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        const url = tab?.url || '';
+        if (!this.perms.canAccess(tabId, url)) {
+          const level = this.perms.getLevel(url);
+          if (level === 'none') {
+            throw new Error(`Access denied: tab ${tabId} has "No Access" permission`);
+          }
+          if (level === 'ask' && !this.perms.hasPendingRequest(tabId)) {
+            // Send permission request to relay, block until resolved
+            this.relay.send({
+              method: 'pkrelay.permission.request',
+              params: { tabId, url, title: tab?.title || '' }
+            });
+            const granted = await this.perms.requestPermission(tabId);
+            if (!granted) {
+              throw new Error(`Permission denied for tab ${tabId}`);
+            }
+          }
+        }
+      }
 
       let result;
 

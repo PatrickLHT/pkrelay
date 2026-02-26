@@ -14,7 +14,11 @@ const actions = new ActionExecutor();
 // --- Alarm handler (relay keepalive & reconnect) ---
 chrome.alarms.onAlarm.addListener((alarm) => relay.handleAlarm(alarm));
 
+// --- Permission manager init ---
+perms.load();
+
 // --- Tab manager init ---
+tabMgr.setPermissionManager(perms);
 tabMgr.init();
 
 // On relay reconnect, re-announce tabs
@@ -23,3 +27,14 @@ relay.onStateChange = (state) => {
     tabMgr.reannounceAll();
   }
 };
+
+// --- Permission relay handlers ---
+relay.on('pkrelay.permission.grant', (msg) => {
+  const { tabId, duration } = msg.params || {};
+  perms.resolvePermissionRequest(tabId, true, duration);
+});
+
+relay.on('pkrelay.permission.deny', (msg) => {
+  const { tabId } = msg.params || {};
+  perms.resolvePermissionRequest(tabId, false);
+});
