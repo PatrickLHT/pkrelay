@@ -3,7 +3,7 @@
   "name": "PKRelay",
   "version": "1.0.0",
   "description": "Token-efficient browser relay for AI agent interaction. Replaces stock OpenClaw Browser Relay with structured perception, high-level actions, and multi-browser support.",
-  "permissions": ["debugger", "tabs", "activeTab", "storage", "alarms", "notifications"],
+  "permissions": ["debugger", "tabs", "activeTab", "storage", "alarms"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "background": {
     "service_worker": "background.js",
