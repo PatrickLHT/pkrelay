@@ -2,8 +2,12 @@
 
 const KEEPALIVE_ALARM = 'pkrelay-keepalive';
 const RECONNECT_ALARM = 'pkrelay-reconnect';
+const STANDBY_ALARM = 'pkrelay-standby-resume';
+const FAST_RETRY_ALARM = 'pkrelay-fast-retry';
 const KEEPALIVE_INTERVAL_MIN = 0.42; // ~25 seconds
 const MAX_RECONNECT_DELAY = 30000;
+const MAX_FAST_RETRY_DELAY = 5000;   // 5s cap for slot-taken retries
+const STANDBY_TIMEOUT = 15000;       // 15s safety timeout
 const HEALTH_CHECK_TIMEOUT = 2000;
 const WS_CONNECT_TIMEOUT = 5000;
 const PONG_TIMEOUT = 5000;
@@ -13,12 +17,15 @@ export class RelayConnection {
     this.ws = null;
     this.port = 18792;
     this.reconnectAttempts = 0;
-    this.state = 'disconnected'; // disconnected | connecting | connected | reconnecting
+    this.state = 'disconnected'; // disconnected | connecting | connected | reconnecting | standby
     this.messageHandlers = new Map(); // method -> handler function
     this.pendingRequests = new Map(); // id -> { resolve, reject, timer }
     this.nextRequestId = 1;
     this.lastPongTime = 0;
     this.onStateChange = null; // callback(newState)
+    this.standbyReason = null;     // { targetBrowser, startTime }
+    this.slotTaken = false;        // true when gateway up but slot taken
+    this.fastRetryAttempts = 0;
   }
 
   // Register handler for incoming messages by method name
@@ -62,27 +69,46 @@ export class RelayConnection {
 
   async connect() {
     if (this.state === 'connecting') return;
+    const wasStandby = this.state === 'standby';
     this.setState('connecting');
     await this.loadPort();
 
     try {
       await this.healthCheck();
     } catch {
+      this.slotTaken = false;
       this.setState('disconnected');
       this.scheduleReconnect();
       return;
     }
 
+    const wsStart = Date.now();
     try {
       await this.openWebSocket();
       this.reconnectAttempts = 0;
+      this.fastRetryAttempts = 0;
+      this.slotTaken = false;
       this.setState('connected');
       this.startKeepalive();
       chrome.alarms.clear(RECONNECT_ALARM);
+      chrome.alarms.clear(FAST_RETRY_ALARM);
+      if (wasStandby) {
+        this.standbyReason = null;
+        chrome.alarms.clear(STANDBY_ALARM);
+      }
       await this.announceIdentity();
     } catch {
-      this.setState('disconnected');
-      this.scheduleReconnect();
+      const elapsed = Date.now() - wsStart;
+      // If health check passed but WS failed fast, slot is likely taken (409)
+      if (elapsed < 2000) {
+        this.slotTaken = true;
+        this.setState(wasStandby ? 'standby' : 'disconnected');
+        this.scheduleFastRetry();
+      } else {
+        this.slotTaken = false;
+        this.setState('disconnected');
+        this.scheduleReconnect();
+      }
     }
   }
 
@@ -99,7 +125,7 @@ export class RelayConnection {
         browserName: stored.browserName || 'Browser',
         browserId,
         extensionVersion: chrome.runtime.getManifest().version,
-        capabilities: ['snapshot', 'actions', 'screenshot', 'diff', 'permissions']
+        capabilities: ['snapshot', 'actions', 'screenshot', 'diff', 'permissions', 'hot-swap']
       }
     });
   }
@@ -181,6 +207,9 @@ export class RelayConnection {
   }
 
   scheduleReconnect() {
+    this.slotTaken = false;
+    this.fastRetryAttempts = 0;
+    chrome.alarms.clear(FAST_RETRY_ALARM);
     const base = 1000;
     const delay = Math.min(base * Math.pow(2, this.reconnectAttempts), MAX_RECONNECT_DELAY);
     const jittered = Math.round(delay * (0.8 + Math.random() * 0.4));
@@ -218,6 +247,12 @@ export class RelayConnection {
     if (alarm.name === RECONNECT_ALARM) {
       if (this.state !== 'connected') void this.connect();
     }
+    if (alarm.name === STANDBY_ALARM) {
+      this.resumeFromStandby();
+    }
+    if (alarm.name === FAST_RETRY_ALARM) {
+      if (this.state !== 'connected') void this.connect();
+    }
   }
 
   setState(newState) {
@@ -228,6 +263,11 @@ export class RelayConnection {
   disconnect() {
     this.stopKeepalive();
     chrome.alarms.clear(RECONNECT_ALARM);
+    chrome.alarms.clear(STANDBY_ALARM);
+    chrome.alarms.clear(FAST_RETRY_ALARM);
+    this.standbyReason = null;
+    this.slotTaken = false;
+    this.fastRetryAttempts = 0;
     // Reject all pending requests
     for (const [id, { reject, timer }] of this.pendingRequests) {
       clearTimeout(timer);
@@ -239,5 +279,70 @@ export class RelayConnection {
       this.ws = null;
     }
     this.setState('disconnected');
+  }
+
+  // Yield the gateway slot for a browser switch
+  async yieldSlot(targetBrowser, requestId, yieldingBrowser) {
+    // Send acknowledgment before disconnecting
+    this.send({
+      id: requestId,
+      result: {
+        status: 'yielding',
+        yieldingBrowser,
+        targetBrowser,
+        timeoutMs: STANDBY_TIMEOUT
+      }
+    });
+
+    // Brief delay to ensure response is flushed
+    await new Promise(r => setTimeout(r, 100));
+
+    // Disconnect without triggering onRelayDisconnected
+    this.stopKeepalive();
+    chrome.alarms.clear(RECONNECT_ALARM);
+    chrome.alarms.clear(FAST_RETRY_ALARM);
+    for (const [id, { reject, timer }] of this.pendingRequests) {
+      clearTimeout(timer);
+      reject(new Error('Relay yielded for browser switch'));
+    }
+    this.pendingRequests.clear();
+    if (this.ws) {
+      this.ws.onclose = null; // prevent onRelayDisconnected
+      this.ws.close();
+      this.ws = null;
+    }
+
+    // Enter standby
+    this.standbyReason = { targetBrowser, startTime: Date.now() };
+    this.setState('standby');
+
+    // Safety timeout: resume if target never connects
+    chrome.alarms.create(STANDBY_ALARM, {
+      delayInMinutes: STANDBY_TIMEOUT / 60000
+    });
+    setTimeout(() => this.resumeFromStandby(), STANDBY_TIMEOUT);
+  }
+
+  resumeFromStandby() {
+    if (this.state !== 'standby') return;
+    chrome.alarms.clear(STANDBY_ALARM);
+    this.standbyReason = null;
+    void this.connect();
+  }
+
+  scheduleFastRetry() {
+    const delay = Math.min(
+      1000 * Math.pow(1.5, this.fastRetryAttempts),
+      MAX_FAST_RETRY_DELAY
+    );
+    const jittered = Math.round(delay * (0.8 + Math.random() * 0.4));
+    this.fastRetryAttempts++;
+
+    setTimeout(() => void this.connect(), jittered);
+
+    // Backup alarm for SW persistence
+    chrome.alarms.create(FAST_RETRY_ALARM, {
+      delayInMinutes: Math.max(jittered / 60000, 0.5)
+    });
   }
 }

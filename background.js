@@ -17,7 +17,8 @@ const BADGE = {
   off:        { text: '',    bg: '#000000' },
   connecting: { text: '...', bg: '#F59E0B' },
   error:      { text: '!',   bg: '#B91C1C' },
-  ask:        { text: '?',   bg: '#3B82F6' }
+  ask:        { text: '?',   bg: '#3B82F6' },
+  standby:    { text: 'SB',  bg: '#8B5CF6' }
 };
 
 function setBadge(tabId, state) {
@@ -31,7 +32,9 @@ function setBadge(tabId, state) {
 function updateGlobalBadge() {
   const attached = tabMgr.getAttachedTabs();
   if (relay.state !== 'connected') {
-    if (relay.state === 'connecting' || relay.state === 'reconnecting') {
+    if (relay.state === 'standby') {
+      setBadge(null, 'standby');
+    } else if (relay.state === 'connecting' || relay.state === 'reconnecting') {
       setBadge(null, 'connecting');
     } else {
       setBadge(null, 'error');
@@ -165,6 +168,27 @@ relay.on('pkrelay.tabs', async (msg) => {
   }
 });
 
+// --- Hot-swap browser switching ---
+relay.on('pkrelay.switchBrowser', async (msg) => {
+  const { id, params } = msg;
+  const { targetBrowser } = params || {};
+
+  if (!targetBrowser) {
+    relay.send({ id, error: 'Missing targetBrowser parameter' });
+    return;
+  }
+
+  const stored = await chrome.storage.local.get(['browserName']);
+  const ourName = stored.browserName || 'Browser';
+
+  if (ourName.toLowerCase() === targetBrowser.toLowerCase()) {
+    relay.send({ id, error: `Already connected as ${ourName}` });
+    return;
+  }
+
+  await relay.yieldSlot(targetBrowser, id, ourName);
+});
+
 // --- Popup / internal message passing ---
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'getState') {
@@ -181,6 +205,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         browserName: stored.browserName || 'Browser',
         relayUrl: `ws://127.0.0.1:${relay.port}/extension`,
         browserLevel: perms.browserLevel,
+        standbyReason: relay.standbyReason,
         tabs
       });
     })();
@@ -200,6 +225,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'connect') {
     relay.connect().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg.type === 'resumeFromStandby') {
+    if (relay.state === 'standby') {
+      relay.resumeFromStandby();
+      setTimeout(() => sendResponse({ ok: true }), 500);
+    } else {
+      sendResponse({ ok: false, reason: 'Not in standby' });
+    }
     return true;
   }
 });

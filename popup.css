@@ -53,6 +53,7 @@ header {
 .status-dot.connected { background: #22C55E; }
 .status-dot.connecting, .status-dot.reconnecting { background: #F59E0B; }
 .status-dot.disconnected { background: #B91C1C; }
+.status-dot.standby { background: #8B5CF6; }
 
 /* Info rows */
 .info-row {
@@ -247,6 +248,35 @@ footer a:hover {
   text-align: center;
   color: #666;
   font-size: 12px;
+}
+
+/* Standby banner */
+.standby-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: rgba(139, 92, 246, 0.15);
+  border-bottom: 1px solid #8B5CF6;
+}
+
+.standby-text {
+  font-size: 12px;
+  color: #C4B5FD;
+}
+
+.standby-text strong {
+  color: #DDD6FE;
+}
+
+.btn-resume {
+  background: #8B5CF6;
+  color: #fff;
+  border-color: #7C3AED;
+}
+
+.btn-resume:hover {
+  background: #7C3AED;
 }
 
 /* Scrollbar */

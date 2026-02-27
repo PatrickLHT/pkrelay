@@ -16,11 +16,21 @@ function render(state) {
   // Connection status
   const dot = $('#statusDot');
   dot.className = `status-dot ${state.connectionState}`;
-  $('#connState').textContent = capitalize(state.connectionState);
+  $('#connState').textContent =
+    state.connectionState === 'standby' ? 'Standby' : capitalize(state.connectionState);
 
   // Info
   $('#browserName').textContent = state.browserName;
   $('#relayUrl').textContent = state.relayUrl;
+
+  // Standby banner
+  const banner = $('#standbyBanner');
+  if (state.connectionState === 'standby' && state.standbyReason) {
+    banner.style.display = 'flex';
+    $('#standbyTarget').textContent = state.standbyReason.targetBrowser;
+  } else {
+    banner.style.display = 'none';
+  }
 
   // Browser level
   const blSelect = $('#browserLevel');
@@ -169,6 +179,12 @@ $('#settingsLink').addEventListener('click', (e) => {
 
 $('#connectBtn').addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'connect' }, () => {
+    setTimeout(refresh, 500);
+  });
+});
+
+$('#resumeBtn').addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'resumeFromStandby' }, () => {
     setTimeout(refresh, 500);
   });
 });
