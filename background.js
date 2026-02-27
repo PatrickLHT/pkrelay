@@ -70,6 +70,9 @@ tabMgr.onTabChange = (tabId, attached) => {
 };
 tabMgr.init();
 
+// --- Auto-connect on startup ---
+relay.connect();
+
 // On relay state change, update badge and re-announce
 relay.onStateChange = (state) => {
   updateGlobalBadge();
@@ -95,8 +98,9 @@ relay.on('pkrelay.permission.deny', (msg) => {
 relay.on('pkrelay.snapshot', async (msg) => {
   const { id, params } = msg;
   const { tabTarget, diff, elementId, depth } = params || {};
-  const tabId = tabMgr.resolveTab(tabTarget);
+  const tabId = tabMgr.resolveTabTarget(tabTarget);
   try {
+    await tabMgr.enforcePermission(tabId);
     const result = await perception.snapshot(tabId, { diff, elementId, depth });
     relay.send({ id, result });
   } catch (err) {
@@ -110,13 +114,17 @@ actions.setPerception(perception);
 relay.on('pkrelay.action', async (msg) => {
   const { id, params } = msg;
   const { tabTarget, action } = params || {};
-  const tabId = tabMgr.resolveTab(tabTarget);
+  const tabId = tabMgr.resolveTabTarget(tabTarget);
   try {
+    await tabMgr.enforcePermission(tabId);
     const result = await actions.execute(tabId, action);
-    // Auto-include snapshot diff with action result
-    await new Promise(r => setTimeout(r, 100)); // Brief settle time
-    const diff = await perception.snapshot(tabId, { diff: true });
-    relay.send({ id, result: { ...result, snapshot: diff } });
+    // Auto-include snapshot diff with action result (non-fatal if it fails)
+    let snapshot = null;
+    try {
+      await new Promise(r => setTimeout(r, 100)); // Brief settle time
+      snapshot = await perception.snapshot(tabId, { diff: true });
+    } catch {}
+    relay.send({ id, result: { ...result, snapshot } });
   } catch (err) {
     relay.send({ id, error: String(err.message) });
   }
@@ -125,8 +133,9 @@ relay.on('pkrelay.action', async (msg) => {
 relay.on('pkrelay.screenshot', async (msg) => {
   const { id, params } = msg;
   const { tabTarget, elementIndex, format, quality } = params || {};
-  const tabId = tabMgr.resolveTab(tabTarget);
+  const tabId = tabMgr.resolveTabTarget(tabTarget);
   try {
+    await tabMgr.enforcePermission(tabId);
     const result = await perception.takeScreenshot(tabId, { elementIndex, format, quality });
     relay.send({ id, result });
   } catch (err) {

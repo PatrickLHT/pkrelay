@@ -104,10 +104,18 @@ export class PermissionManager {
 
   // Request permission — returns promise that resolves when user responds
   requestPermission(tabId) {
-    return new Promise((resolve, reject) => {
-      this.pendingRequests.set(tabId, { resolve, reject });
-      if (this.onPendingChange) this.onPendingChange(tabId);
+    // If there's already a pending request, return the shared promise
+    if (this.pendingRequests.has(tabId)) {
+      return this.pendingRequests.get(tabId).promise;
+    }
+    const entry = {};
+    entry.promise = new Promise((resolve, reject) => {
+      entry.resolve = resolve;
+      entry.reject = reject;
     });
+    this.pendingRequests.set(tabId, entry);
+    if (this.onPendingChange) this.onPendingChange(tabId);
+    return entry.promise;
   }
 
   hasPendingRequest(tabId) {
@@ -130,10 +138,11 @@ export class PermissionManager {
       const u = new URL(url);
       const target = u.hostname + u.pathname;
 
-      // Convert glob pattern to regex
-      const regex = new RegExp(
-        '^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$'
-      );
+      // Escape all regex metacharacters except *, then convert * to .*
+      const escaped = pattern
+        .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\*/g, '.*');
+      const regex = new RegExp('^' + escaped + '$');
       return regex.test(target) || regex.test(u.hostname);
     } catch {
       return false;

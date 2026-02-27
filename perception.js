@@ -22,9 +22,9 @@ const STRUCTURAL_ROLES = new Set([
 
 export class PerceptionEngine {
   constructor() {
-    this.lastSnapshot = new Map(); // tabId -> snapshot
-    this.elementIndex = new Map(); // index -> { backendNodeId, tabId, axNodeId }
-    this.nextIndex = 1;
+    this.lastSnapshot = new Map();  // tabId -> snapshot
+    this.tabElements = new Map();   // tabId -> Map(index -> { backendNodeId, tabId, axNodeId })
+    this.tabNextIndex = new Map();  // tabId -> next index counter
   }
 
   // Take a full snapshot of a tab
@@ -55,9 +55,9 @@ export class PerceptionEngine {
     // 5. Get page info
     const pageInfo = await this.getPageInfo(tabId);
 
-    // 6. Build indexed snapshot
-    this.nextIndex = 1;
-    this.elementIndex.clear();
+    // 6. Build indexed snapshot (per-tab element indices)
+    this.tabNextIndex.set(tabId, 1);
+    this.tabElements.set(tabId, new Map());
     const snapshot = this.formatSnapshot(tabId, nodes, boxModels, visualMeta, pageInfo);
 
     // 7. Compute diff if requested
@@ -232,9 +232,11 @@ export class PerceptionEngine {
       const box = node.backendDOMNodeId ? boxModels.get(node.backendDOMNodeId) : null;
       const visual = node.backendDOMNodeId ? visualMeta.get(node.backendDOMNodeId) : null;
 
-      // Assign index
-      const idx = this.nextIndex++;
-      this.elementIndex.set(idx, {
+      // Assign per-tab index
+      const idx = this.tabNextIndex.get(tabId);
+      this.tabNextIndex.set(tabId, idx + 1);
+      const tabElems = this.tabElements.get(tabId);
+      tabElems.set(idx, {
         backendNodeId: node.backendDOMNodeId,
         tabId,
         axNodeId: node.nodeId
@@ -375,9 +377,18 @@ export class PerceptionEngine {
     };
   }
 
-  // Get element info by index (used by actions)
-  getElement(index) {
-    return this.elementIndex.get(index);
+  // Get element info by index — searches the tab that owns it
+  getElement(index, tabId) {
+    // If tabId provided, search that tab first
+    if (tabId != null) {
+      const tabElems = this.tabElements.get(tabId);
+      if (tabElems?.has(index)) return tabElems.get(index);
+    }
+    // Fallback: search all tabs
+    for (const [, elems] of this.tabElements) {
+      if (elems.has(index)) return elems.get(index);
+    }
+    return undefined;
   }
 
   // Screenshot (on-demand, expensive)
@@ -388,7 +399,7 @@ export class PerceptionEngine {
 
     // Element-level screenshot via clip
     if (options.elementIndex) {
-      const elem = this.elementIndex.get(options.elementIndex);
+      const elem = this.getElement(options.elementIndex, tabId);
       if (elem?.backendNodeId) {
         const box = await chrome.debugger.sendCommand({ tabId }, 'DOM.getBoxModel', {
           backendNodeId: elem.backendNodeId

@@ -203,27 +203,7 @@ export class TabManager {
       if (tabId == null) throw new Error(`No attached tab for ${method}`);
 
       // Permission enforcement
-      if (this.perms) {
-        const tab = await chrome.tabs.get(tabId).catch(() => null);
-        const url = tab?.url || '';
-        if (!this.perms.canAccess(tabId, url)) {
-          const level = this.perms.getLevel(url);
-          if (level === 'none') {
-            throw new Error(`Access denied: tab ${tabId} has "No Access" permission`);
-          }
-          if (level === 'ask' && !this.perms.hasPendingRequest(tabId)) {
-            // Send permission request to relay, block until resolved
-            this.relay.send({
-              method: 'pkrelay.permission.request',
-              params: { tabId, url, title: tab?.title || '' }
-            });
-            const granted = await this.perms.requestPermission(tabId);
-            if (!granted) {
-              throw new Error(`Permission denied for tab ${tabId}`);
-            }
-          }
-        }
-      }
+      await this.enforcePermission(tabId);
 
       let result;
 
@@ -248,6 +228,34 @@ export class TabManager {
     }
   }
 
+  // Enforce permission for a tab — reusable by both stock and extended protocol
+  async enforcePermission(tabId) {
+    if (!this.perms) return;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    const url = tab?.url || '';
+    if (this.perms.canAccess(tabId, url)) return;
+
+    const level = this.perms.getLevel(url);
+    if (level === 'none') {
+      throw new Error(`Access denied: tab ${tabId} has "No Access" permission`);
+    }
+    if (level === 'ask') {
+      // If no pending request, send one to the relay first
+      if (!this.perms.hasPendingRequest(tabId)) {
+        this.relay.send({
+          method: 'pkrelay.permission.request',
+          params: { tabId, url, title: tab?.title || '' }
+        });
+      }
+      // requestPermission returns the shared promise — concurrent callers all await it
+      const granted = await this.perms.requestPermission(tabId);
+      if (!granted) {
+        throw new Error(`Permission denied for tab ${tabId}`);
+      }
+    }
+  }
+
+  // Resolve tab from stock protocol (sessionId + params with targetId)
   resolveTab(sessionId, params) {
     // By session
     if (sessionId && this.tabBySession.has(sessionId)) {
@@ -263,6 +271,25 @@ export class TabManager {
       for (const [tabId, state] of this.tabs) {
         if (state.targetId === targetId) return tabId;
       }
+    }
+    // Fallback: first connected tab
+    for (const [tabId, state] of this.tabs) {
+      if (state.state === 'connected') return tabId;
+    }
+    return null;
+  }
+
+  // Resolve tab from pkrelay extended protocol (tabTarget can be tabId number,
+  // sessionId string, or null/undefined for fallback to first attached tab)
+  resolveTabTarget(tabTarget) {
+    // Direct tab ID
+    if (typeof tabTarget === 'number' && this.tabs.has(tabTarget)) {
+      return tabTarget;
+    }
+    // Session ID string
+    if (typeof tabTarget === 'string') {
+      if (this.tabBySession.has(tabTarget)) return this.tabBySession.get(tabTarget);
+      if (this.childSessionToTab.has(tabTarget)) return this.childSessionToTab.get(tabTarget);
     }
     // Fallback: first connected tab
     for (const [tabId, state] of this.tabs) {
