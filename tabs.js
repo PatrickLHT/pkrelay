@@ -253,9 +253,13 @@ export class TabManager {
     if (level === 'ask') {
       // If no pending request, send one to the relay first
       if (!this.perms.hasPendingRequest(tabId)) {
+        // Wrap in forwardCDPEvent so the gateway forwards to /cdp clients
         this.relay.send({
-          method: 'pkrelay.permission.request',
-          params: { tabId, url, title: tab?.title || '' }
+          method: 'forwardCDPEvent',
+          params: {
+            method: 'pkrelay.permission.request',
+            params: { tabId, url, title: tab?.title || '' }
+          }
         });
       }
       // requestPermission returns the shared promise — concurrent callers all await it
