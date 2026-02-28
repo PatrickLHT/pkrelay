@@ -242,6 +242,7 @@ export class TabManager {
   // Enforce permission for a tab — reusable by both stock and extended protocol
   async enforcePermission(tabId) {
     if (!this.perms) return;
+    if (tabId == null) throw new Error('No tab specified');
     const tab = await chrome.tabs.get(tabId).catch(() => null);
     const url = tab?.url || '';
     if (this.perms.canAccess(tabId, url)) return;
