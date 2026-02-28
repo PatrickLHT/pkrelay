@@ -204,6 +204,23 @@ footer {
   padding: 8px 12px;
 }
 
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footer-right {
+  display: flex;
+  gap: 6px;
+}
+
+.version {
+  font-size: 11px;
+  color: #555;
+  font-family: 'SF Mono', Menlo, Monaco, monospace;
+}
+
 footer a {
   color: #3B82F6;
   text-decoration: none;
@@ -227,6 +244,14 @@ footer a:hover {
 
 .btn-sm:hover {
   background: #0f3460;
+}
+
+.btn-update {
+  color: #8a8a9a;
+}
+
+.btn-update:hover {
+  color: #e1e1e1;
 }
 
 .icon-btn {

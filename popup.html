@@ -50,8 +50,14 @@
   </div>
 
   <footer>
-    <a href="#" id="settingsLink">Settings</a>
-    <button id="connectBtn" class="btn-sm">Connect</button>
+    <div class="footer-left">
+      <a href="#" id="settingsLink">Settings</a>
+      <span class="version" id="version">v--</span>
+    </div>
+    <div class="footer-right">
+      <button id="updateBtn" class="btn-sm btn-update" title="Reload extension from disk">Update</button>
+      <button id="connectBtn" class="btn-sm">Connect</button>
+    </div>
   </footer>
 
   <script src="popup.js"></script>

@@ -32,6 +32,9 @@ function render(state) {
     banner.style.display = 'none';
   }
 
+  // Version
+  $('#version').textContent = 'v' + chrome.runtime.getManifest().version;
+
   // Browser level
   const blSelect = $('#browserLevel');
   blSelect.value = state.browserLevel;
@@ -181,6 +184,10 @@ $('#connectBtn').addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'connect' }, () => {
     setTimeout(refresh, 500);
   });
+});
+
+$('#updateBtn').addEventListener('click', () => {
+  chrome.runtime.reload();
 });
 
 $('#resumeBtn').addEventListener('click', () => {
