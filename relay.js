@@ -315,11 +315,18 @@ export class RelayConnection {
       this.ws = null;
     }
 
-    // Enter standby
+    // Enter standby with fast-retry polling
     this.standbyReason = { targetBrowser, startTime: Date.now() };
+    this.fastRetryAttempts = 0;
+    this.slotTaken = true;
     this.setState('standby');
 
-    // Safety timeout: resume if target never connects
+    // Grace period: give target browser 2s to connect, then start polling
+    setTimeout(() => {
+      if (this.state === 'standby') this.scheduleFastRetry();
+    }, 2000);
+
+    // Safety timeout: force resume if target never connects
     chrome.alarms.create(STANDBY_ALARM, {
       delayInMinutes: STANDBY_TIMEOUT / 60000
     });
@@ -329,7 +336,10 @@ export class RelayConnection {
   resumeFromStandby() {
     if (this.state !== 'standby') return;
     chrome.alarms.clear(STANDBY_ALARM);
+    chrome.alarms.clear(FAST_RETRY_ALARM);
     this.standbyReason = null;
+    this.slotTaken = false;
+    this.fastRetryAttempts = 0;
     void this.connect();
   }
 
