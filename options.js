@@ -3,14 +3,16 @@
 const $ = (sel) => document.querySelector(sel);
 
 async function load() {
-  const stored = await chrome.storage.local.get(['browserName', 'relayPort']);
+  const stored = await chrome.storage.local.get(['browserName', 'relayPort', 'relayToken']);
   $('#browserName').value = stored.browserName || '';
   $('#relayPort').value = stored.relayPort || 18792;
+  $('#relayToken').value = stored.relayToken || '';
 }
 
 async function save() {
   const browserName = $('#browserName').value.trim();
   const relayPort = parseInt($('#relayPort').value, 10);
+  const relayToken = $('#relayToken').value.trim();
 
   if (!relayPort || relayPort < 1 || relayPort > 65535) {
     showStatus('error', 'Port must be 1-65535');
@@ -19,7 +21,8 @@ async function save() {
 
   await chrome.storage.local.set({
     browserName: browserName || 'Browser',
-    relayPort
+    relayPort,
+    relayToken
   });
 
   showToast('Saved');

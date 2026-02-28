@@ -16,6 +16,7 @@ export class RelayConnection {
   constructor() {
     this.ws = null;
     this.port = 18792;
+    this.token = '';
     this.reconnectAttempts = 0;
     this.state = 'disconnected'; // disconnected | connecting | connected | reconnecting | standby
     this.messageHandlers = new Map(); // method -> handler function
@@ -53,9 +54,10 @@ export class RelayConnection {
     });
   }
 
-  async loadPort() {
-    const stored = await chrome.storage.local.get(['relayPort']);
+  async loadConfig() {
+    const stored = await chrome.storage.local.get(['relayPort', 'relayToken']);
     this.port = Number(stored.relayPort) || 18792;
+    this.token = stored.relayToken || '';
   }
 
   async healthCheck() {
@@ -71,7 +73,7 @@ export class RelayConnection {
     if (this.state === 'connecting') return;
     const wasStandby = this.state === 'standby';
     this.setState('connecting');
-    await this.loadPort();
+    await this.loadConfig();
 
     try {
       await this.healthCheck();
@@ -132,7 +134,8 @@ export class RelayConnection {
 
   openWebSocket() {
     return new Promise((resolve, reject) => {
-      const url = `ws://127.0.0.1:${this.port}/extension`;
+      const tokenParam = this.token ? `?token=${encodeURIComponent(this.token)}` : '';
+      const url = `ws://127.0.0.1:${this.port}/extension${tokenParam}`;
       const ws = new WebSocket(url);
       const timer = setTimeout(() => {
         ws.close();
