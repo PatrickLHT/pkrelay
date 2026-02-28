@@ -168,6 +168,32 @@ relay.on('pkrelay.tabs', async (msg) => {
   }
 });
 
+// --- Tab attach/detach handler ---
+relay.on('pkrelay.attach', async (msg) => {
+  const { id, params } = msg;
+  const { tabId } = params || {};
+  try {
+    if (typeof tabId !== 'number') throw new Error('Missing or invalid tabId');
+    await tabMgr.enforcePermission(tabId);
+    const tabState = await tabMgr.attachTab(tabId);
+    relay.send({ id, result: { tabId, sessionId: tabState.sessionId, targetId: tabState.targetId } });
+  } catch (err) {
+    relay.send({ id, error: String(err.message) });
+  }
+});
+
+relay.on('pkrelay.detach', async (msg) => {
+  const { id, params } = msg;
+  const { tabId } = params || {};
+  try {
+    if (typeof tabId !== 'number') throw new Error('Missing or invalid tabId');
+    await tabMgr.detachTab(tabId, 'agent');
+    relay.send({ id, result: { tabId, detached: true } });
+  } catch (err) {
+    relay.send({ id, error: String(err.message) });
+  }
+});
+
 // --- Hot-swap browser switching ---
 relay.on('pkrelay.switchBrowser', async (msg) => {
   const { id, params } = msg;
