@@ -9,7 +9,7 @@ const MAX_RECONNECT_DELAY = 30000;
 const MAX_FAST_RETRY_DELAY = 5000;   // 5s cap for slot-taken retries
 const STANDBY_TIMEOUT = 15000;       // 15s safety timeout
 const HEALTH_CHECK_TIMEOUT = 2000;
-const WS_CONNECT_TIMEOUT = 5000;
+const WS_CONNECT_TIMEOUT = 3000;
 const PONG_TIMEOUT = 5000;
 
 export class RelayConnection {
@@ -84,7 +84,6 @@ export class RelayConnection {
       return;
     }
 
-    const wsStart = Date.now();
     try {
       await this.openWebSocket();
       this.reconnectAttempts = 0;
@@ -100,17 +99,12 @@ export class RelayConnection {
       }
       await this.announceIdentity();
     } catch {
-      const elapsed = Date.now() - wsStart;
-      // If health check passed but WS failed fast, slot is likely taken (409)
-      if (elapsed < 2000) {
-        this.slotTaken = true;
-        this.setState(wasStandby ? 'standby' : 'disconnected');
-        this.scheduleFastRetry();
-      } else {
-        this.slotTaken = false;
-        this.setState('disconnected');
-        this.scheduleReconnect();
-      }
+      // Health check passed but WS failed → slot is taken (409)
+      // Browser WebSocket API doesn't reject HTTP 409 quickly, so we
+      // can't rely on timing — use fast-retry whenever gateway is up.
+      this.slotTaken = true;
+      this.setState(wasStandby ? 'standby' : 'disconnected');
+      this.scheduleFastRetry();
     }
   }
 
