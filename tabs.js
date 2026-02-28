@@ -198,6 +198,17 @@ export class TabManager {
     const { id, params } = msg;
     const { sessionId, method, params: cmdParams } = params || {};
 
+    // Dispatch pkrelay.* extended protocol to registered relay handlers
+    if (method && method.startsWith('pkrelay.')) {
+      const handler = this.relay.messageHandlers.get(method);
+      if (handler) {
+        handler({ id, method, params: cmdParams });
+        return;
+      }
+      this.relay.send({ id, error: `Unknown method: ${method}` });
+      return;
+    }
+
     try {
       const tabId = this.resolveTab(sessionId, cmdParams);
       if (tabId == null) throw new Error(`No attached tab for ${method}`);
