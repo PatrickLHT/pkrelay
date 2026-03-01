@@ -7,7 +7,8 @@ const FAST_RETRY_ALARM = 'pkrelay-fast-retry';
 const KEEPALIVE_INTERVAL_MIN = 0.42; // ~25 seconds
 const MAX_RECONNECT_DELAY = 30000;
 const MAX_FAST_RETRY_DELAY = 5000;   // 5s cap for slot-taken retries
-const STANDBY_TIMEOUT = 15000;       // 15s safety timeout
+const STANDBY_TIMEOUT = 15000;            // 15s for intentional browser switches
+const CONTENTION_STANDBY_TIMEOUT = 120000; // 2min for slot contention
 const HEALTH_CHECK_TIMEOUT = 2000;
 const WS_CONNECT_TIMEOUT = 3000;
 const PONG_TIMEOUT = 5000;
@@ -27,6 +28,8 @@ export class RelayConnection {
     this.standbyReason = null;     // { targetBrowser, startTime }
     this.slotTaken = false;        // true when gateway up but slot taken
     this.fastRetryAttempts = 0;
+    this.connectedAt = 0;
+    this.isDefault = false;
   }
 
   // Register handler for incoming messages by method name
@@ -55,9 +58,47 @@ export class RelayConnection {
   }
 
   async loadConfig() {
-    const stored = await chrome.storage.local.get(['relayPort', 'relayToken']);
+    const stored = await chrome.storage.local.get(['relayPort', 'relayToken', 'isDefault']);
     this.port = Number(stored.relayPort) || 18792;
     this.token = stored.relayToken || '';
+    this.isDefault = !!stored.isDefault;
+
+    // If no manual token, try native messaging to read from openclaw.json
+    if (!this.token) {
+      try {
+        const config = await this.readNativeConfig();
+        if (config.token) this.token = config.token;
+        // Note: don't use config.port — openclaw.json has the main gateway port,
+        // but extensions connect to the separate extension port (default 18792)
+      } catch {}
+    }
+  }
+
+  readNativeConfig() {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Native messaging timeout')), 2000);
+      try {
+        chrome.runtime.sendNativeMessage(
+          'com.pkrelay.token_reader',
+          { action: 'getConfig' },
+          (response) => {
+            clearTimeout(timer);
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (response?.error) {
+              reject(new Error(response.error));
+              return;
+            }
+            resolve(response || {});
+          }
+        );
+      } catch (err) {
+        clearTimeout(timer);
+        reject(err);
+      }
+    });
   }
 
   async healthCheck() {
@@ -86,8 +127,10 @@ export class RelayConnection {
 
     try {
       await this.openWebSocket();
-      this.reconnectAttempts = 0;
-      this.fastRetryAttempts = 0;
+      this.connectedAt = Date.now();
+      this.lastPongTime = Date.now(); // Enable stale-pong detection from the start
+      // Note: don't reset fastRetryAttempts here — only reset after stable connection
+      // (see onRelayDisconnected which checks connDuration)
       this.slotTaken = false;
       this.setState('connected');
       this.startKeepalive();
@@ -99,17 +142,29 @@ export class RelayConnection {
       }
       await this.announceIdentity();
     } catch {
-      // Health check passed but WS failed → slot is taken (409)
-      // Browser WebSocket API doesn't reject HTTP 409 quickly, so we
-      // can't rely on timing — use fast-retry whenever gateway is up.
+      // Health check passed but WebSocket upgrade failed — slot likely taken (409)
       this.slotTaken = true;
+
+      // After too many rejected connection attempts, enter standby
+      const maxAttempts = this.isDefault ? 8 : 4;
+      if (this.fastRetryAttempts >= maxAttempts) {
+        this.standbyReason = { targetBrowser: 'another browser', startTime: Date.now() };
+        this.fastRetryAttempts = 0;
+        this.setState('standby');
+        chrome.alarms.create(STANDBY_ALARM, {
+          delayInMinutes: CONTENTION_STANDBY_TIMEOUT / 60000
+        });
+        setTimeout(() => this.resumeFromStandby(), CONTENTION_STANDBY_TIMEOUT);
+        return;
+      }
+
       this.setState(wasStandby ? 'standby' : 'disconnected');
       this.scheduleFastRetry();
     }
   }
 
   async announceIdentity() {
-    const stored = await chrome.storage.local.get(['browserName', 'browserId']);
+    const stored = await chrome.storage.local.get(['browserName', 'browserId', 'isDefault']);
     let browserId = stored.browserId;
     if (!browserId) {
       browserId = `pkrelay-${crypto.randomUUID().slice(0, 8)}`;
@@ -120,6 +175,7 @@ export class RelayConnection {
       params: {
         browserName: stored.browserName || 'Browser',
         browserId,
+        isDefault: !!stored.isDefault,
         extensionVersion: chrome.runtime.getManifest().version,
         capabilities: ['snapshot', 'actions', 'screenshot', 'diff', 'permissions', 'hot-swap']
       }
@@ -192,7 +248,6 @@ export class RelayConnection {
   }
 
   onRelayDisconnected() {
-    this.setState('reconnecting');
     this.stopKeepalive();
     // Reject all pending requests
     for (const [id, { reject, timer }] of this.pendingRequests) {
@@ -200,7 +255,36 @@ export class RelayConnection {
       reject(new Error('Relay disconnected'));
     }
     this.pendingRequests.clear();
-    this.scheduleReconnect();
+
+    const connDuration = Date.now() - (this.connectedAt || 0);
+    if (connDuration < 5000) {
+      // Connection dropped almost immediately — another browser likely took the slot
+      this.slotTaken = true;
+
+      // After several rapid disconnections, stop fighting and enter standby
+      // Default browser gets more attempts before yielding
+      const maxAttempts = this.isDefault ? 8 : 4;
+      if (this.fastRetryAttempts >= maxAttempts) {
+        this.standbyReason = { targetBrowser: 'another browser', startTime: Date.now() };
+        this.fastRetryAttempts = 0;
+        this.setState('standby');
+        // Long timeout for contention — don't keep fighting the other browser
+        chrome.alarms.create(STANDBY_ALARM, {
+          delayInMinutes: CONTENTION_STANDBY_TIMEOUT / 60000
+        });
+        setTimeout(() => this.resumeFromStandby(), CONTENTION_STANDBY_TIMEOUT);
+        return;
+      }
+
+      this.setState('reconnecting');
+      this.scheduleFastRetry();
+    } else {
+      // Normal disconnection after stable connection — reset attempts
+      this.reconnectAttempts = 0;
+      this.fastRetryAttempts = 0;
+      this.setState('reconnecting');
+      this.scheduleReconnect();
+    }
   }
 
   scheduleReconnect() {
@@ -280,19 +364,21 @@ export class RelayConnection {
 
   // Yield the gateway slot for a browser switch
   async yieldSlot(targetBrowser, requestId, yieldingBrowser) {
-    // Send acknowledgment before disconnecting
-    this.send({
-      id: requestId,
-      result: {
-        status: 'yielding',
-        yieldingBrowser,
-        targetBrowser,
-        timeoutMs: STANDBY_TIMEOUT
-      }
-    });
+    // Send acknowledgment before disconnecting (skip for popup-initiated switches)
+    if (requestId != null) {
+      this.send({
+        id: requestId,
+        result: {
+          status: 'yielding',
+          yieldingBrowser,
+          targetBrowser,
+          timeoutMs: STANDBY_TIMEOUT
+        }
+      });
 
-    // Brief delay to ensure response is flushed
-    await new Promise(r => setTimeout(r, 100));
+      // Brief delay to ensure response is flushed
+      await new Promise(r => setTimeout(r, 100));
+    }
 
     // Disconnect without triggering onRelayDisconnected
     this.stopKeepalive();

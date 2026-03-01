@@ -12,6 +12,7 @@
     </div>
     <div class="header-right">
       <span id="connState">Disconnected</span>
+      <span id="connDesc" class="conn-desc"></span>
     </div>
   </header>
 
@@ -27,6 +28,16 @@
   <div id="standbyBanner" class="standby-banner" style="display:none">
     <div class="standby-text">Standby — waiting for <strong id="standbyTarget">--</strong></div>
     <button id="resumeBtn" class="btn-sm btn-resume">Resume</button>
+  </div>
+
+  <div class="section" id="switcherSection" style="display:none">
+    <div class="section-header">
+      <span>Switch Browser</span>
+    </div>
+    <div class="switcher-row">
+      <select id="browserSelect"></select>
+      <button id="switchBtn" class="btn-sm">Switch</button>
+    </div>
   </div>
 
   <div class="section">

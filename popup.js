@@ -19,6 +19,17 @@ function render(state) {
   $('#connState').textContent =
     state.connectionState === 'standby' ? 'Standby' : capitalize(state.connectionState);
 
+  const descriptions = {
+    connected: 'Ready for commands',
+    connecting: 'Connecting to gateway...',
+    reconnecting: 'Connection lost, retrying...',
+    disconnected: 'Not connected',
+    standby: state.standbyReason?.targetBrowser === 'another browser'
+      ? 'Another browser has the slot'
+      : 'Yielded slot for browser switch'
+  };
+  $('#connDesc').textContent = descriptions[state.connectionState] || '';
+
   // Info
   $('#browserName').textContent = state.browserName;
   $('#relayUrl').textContent = state.relayUrl;
@@ -34,6 +45,27 @@ function render(state) {
 
   // Version
   $('#version').textContent = 'v' + chrome.runtime.getManifest().version;
+
+  // Browser switcher
+  const switcherSection = $('#switcherSection');
+  const browserSelect = $('#browserSelect');
+  const knownBrowsers = state.knownBrowsers || [];
+  const otherBrowsers = knownBrowsers.filter(
+    b => b.toLowerCase() !== state.browserName.toLowerCase()
+  );
+
+  if (otherBrowsers.length === 0 || state.connectionState !== 'connected') {
+    switcherSection.style.display = 'none';
+  } else {
+    switcherSection.style.display = '';
+    browserSelect.innerHTML = '';
+    for (const name of otherBrowsers) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      browserSelect.appendChild(opt);
+    }
+  }
 
   // Browser level
   const blSelect = $('#browserLevel');
@@ -174,6 +206,16 @@ $('#browserLevel').addEventListener('change', (e) => {
 });
 
 $('#refreshBtn').addEventListener('click', refresh);
+
+$('#switchBtn').addEventListener('click', () => {
+  const target = $('#browserSelect').value;
+  if (!target) return;
+  chrome.runtime.sendMessage({ type: 'switchBrowser', targetBrowser: target }, (resp) => {
+    if (resp?.ok) {
+      setTimeout(refresh, 500);
+    }
+  });
+});
 
 $('#settingsLink').addEventListener('click', (e) => {
   e.preventDefault();

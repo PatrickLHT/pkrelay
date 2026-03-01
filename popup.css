@@ -39,6 +39,13 @@ header {
 .header-right {
   font-size: 12px;
   color: #8a8a9a;
+  text-align: right;
+}
+
+.conn-desc {
+  display: block;
+  font-size: 10px;
+  color: #666;
 }
 
 /* Status dot */
@@ -178,6 +185,18 @@ header {
 .tab-perm select.override {
   opacity: 0.5;
   pointer-events: none;
+}
+
+/* Browser switcher */
+.switcher-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.switcher-row select {
+  flex: 1;
 }
 
 /* Selects */

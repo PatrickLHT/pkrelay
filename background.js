@@ -11,6 +11,10 @@ const perms = new PermissionManager();
 const perception = new PerceptionEngine();
 const actions = new ActionExecutor();
 
+// Expose for CDP debugging
+self._relay = relay;
+self._tabMgr = tabMgr;
+
 // --- Badge management ---
 const BADGE = {
   on:         { text: 'ON',  bg: '#22C55E' },
@@ -204,12 +208,19 @@ relay.on('pkrelay.switchBrowser', async (msg) => {
     return;
   }
 
-  const stored = await chrome.storage.local.get(['browserName']);
+  const stored = await chrome.storage.local.get(['browserName', 'knownBrowsers']);
   const ourName = stored.browserName || 'Browser';
 
   if (ourName.toLowerCase() === targetBrowser.toLowerCase()) {
     relay.send({ id, error: `Already connected as ${ourName}` });
     return;
+  }
+
+  // Auto-add target to known browsers
+  const known = stored.knownBrowsers || [];
+  if (!known.some(b => b.toLowerCase() === targetBrowser.toLowerCase())) {
+    known.push(targetBrowser);
+    await chrome.storage.local.set({ knownBrowsers: known });
   }
 
   await relay.yieldSlot(targetBrowser, id, ourName);
@@ -219,7 +230,7 @@ relay.on('pkrelay.switchBrowser', async (msg) => {
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === 'getState') {
     (async () => {
-      const stored = await chrome.storage.local.get(['browserName']);
+      const stored = await chrome.storage.local.get(['browserName', 'knownBrowsers']);
       const tabPerms = await perms.getTabPermissions();
       const attachedTabs = tabMgr.getAttachedTabs();
       const tabs = tabPerms.map(t => ({
@@ -232,6 +243,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         relayUrl: `ws://127.0.0.1:${relay.port}/extension`,
         browserLevel: perms.browserLevel,
         standbyReason: relay.standbyReason,
+        knownBrowsers: stored.knownBrowsers || [],
         tabs
       });
     })();
@@ -251,6 +263,24 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'connect') {
     relay.connect().then(() => sendResponse({ ok: true }));
+    return true;
+  }
+  if (msg.type === 'switchBrowser') {
+    (async () => {
+      const { targetBrowser } = msg;
+      if (!targetBrowser) {
+        sendResponse({ ok: false, reason: 'Missing targetBrowser' });
+        return;
+      }
+      const stored = await chrome.storage.local.get(['browserName']);
+      const ourName = stored.browserName || 'Browser';
+      if (ourName.toLowerCase() === targetBrowser.toLowerCase()) {
+        sendResponse({ ok: false, reason: `Already connected as ${ourName}` });
+        return;
+      }
+      await relay.yieldSlot(targetBrowser, null, ourName);
+      sendResponse({ ok: true });
+    })();
     return true;
   }
   if (msg.type === 'resumeFromStandby') {
