@@ -3,6 +3,14 @@
 import json, struct, sys, os
 
 
+def read_message():
+    raw = sys.stdin.buffer.read(4)
+    if len(raw) < 4:
+        return None
+    length = struct.unpack('<I', raw)[0]
+    return json.loads(sys.stdin.buffer.read(length))
+
+
 def send_message(msg):
     encoded = json.dumps(msg).encode('utf-8')
     sys.stdout.buffer.write(struct.pack('<I', len(encoded)))
@@ -11,6 +19,7 @@ def send_message(msg):
 
 
 try:
+    read_message()  # Consume the incoming request (required by protocol)
     config_path = os.path.expanduser('~/.openclaw/openclaw.json')
     with open(config_path) as f:
         config = json.load(f)
