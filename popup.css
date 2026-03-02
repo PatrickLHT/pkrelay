@@ -199,6 +199,8 @@ header {
   flex: 1;
 }
 
+.sep { color: #555; margin: 0 2px; }
+
 /* Selects */
 select {
   font-size: 12px;

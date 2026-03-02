@@ -222,6 +222,11 @@ $('#settingsLink').addEventListener('click', (e) => {
   chrome.runtime.openOptionsPage();
 });
 
+$('#feedbackLink').addEventListener('click', (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: 'https://github.com/PatrickLHT/pkrelay/issues/new' });
+});
+
 $('#connectBtn').addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'connect' }, () => {
     setTimeout(refresh, 500);
