@@ -246,7 +246,7 @@ export class RelayConnection {
     // Dispatch to registered handler
     const handler = this.messageHandlers.get(msg.method);
     if (handler) {
-      handler(msg);
+      Promise.resolve(handler(msg)).catch(() => {});
     }
   }
 
