@@ -141,11 +141,12 @@ export class TabManager {
       this.childSessionToTab.set(String(params.sessionId), tabId);
     }
 
-    // Forward event to relay — match stock format (no outer sessionId)
+    // Forward event to relay — sessionId needed for gateway event routing
     this.relay.send({
       method: 'forwardCDPEvent',
       params: {
         method,
+        sessionId: tabState.sessionId,
         params
       }
     });

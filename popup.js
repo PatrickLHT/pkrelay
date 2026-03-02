@@ -258,6 +258,8 @@ $('#updateBtn').addEventListener('click', () => {
   });
 });
 
+$('#reloadBtn').addEventListener('click', () => chrome.runtime.reload());
+
 $('#resumeBtn').addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'resumeFromStandby' }, () => {
     setTimeout(refresh, 500);
