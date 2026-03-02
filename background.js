@@ -89,16 +89,26 @@ relay.onStateChange = (state) => {
   }
 };
 
-// Auto-attach the active tab if permissions allow and none are attached
+// Auto-attach the active tab on connect — only if permission is "full".
+// Skips "ask" tabs (would block forever waiting for popup approval).
 async function autoAttachActiveTab() {
   if (tabMgr.getAttachedTabs().size > 0) return;
   try {
     const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (activeTab && activeTab.url && !activeTab.url.startsWith('chrome')) {
-      await tabMgr.enforcePermission(activeTab.id);
-      await tabMgr.attachTab(activeTab.id);
+    if (!activeTab || !activeTab.url || activeTab.url.startsWith('chrome')) return;
+
+    // Only auto-attach if this tab has "full" permission (no user prompt needed)
+    const level = perms.getLevel(activeTab.url);
+    if (level !== 'full') {
+      console.log(`[PKRelay] Auto-attach skipped: tab ${activeTab.id} has "${level}" permission (need "full")`);
+      return;
     }
-  } catch {}
+
+    await tabMgr.attachTab(activeTab.id);
+    console.log(`[PKRelay] Auto-attached tab ${activeTab.id}: ${activeTab.title}`);
+  } catch (err) {
+    console.log('[PKRelay] Auto-attach failed:', err.message);
+  }
 }
 
 // --- Permission relay handlers ---
@@ -170,18 +180,22 @@ relay.on('pkrelay.screenshot', async (msg) => {
 const _origCDPHandler = relay.messageHandlers.get('forwardCDPCommand');
 relay.messageHandlers.delete('forwardCDPCommand');
 relay.on('forwardCDPCommand', async (msg) => {
-  // Auto-attach active tab when any CDP command arrives and none are attached
+  // Auto-attach active tab when CDP command arrives and none are attached.
+  // Only for "full" permission tabs — "ask" tabs would block the command.
   const attached = tabMgr.getAttachedTabs();
   if (attached.size === 0) {
     try {
       const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       if (activeTab && activeTab.url && !activeTab.url.startsWith('chrome')) {
-        await tabMgr.enforcePermission(activeTab.id);
-        await tabMgr.attachTab(activeTab.id);
-        await new Promise(r => setTimeout(r, 200));
+        const level = perms.getLevel(activeTab.url);
+        if (level === 'full') {
+          await tabMgr.attachTab(activeTab.id);
+          await new Promise(r => setTimeout(r, 200));
+          console.log(`[PKRelay] Auto-attached tab ${activeTab.id} on CDP command`);
+        }
       }
     } catch (err) {
-      console.log('[PKRelay] Auto-attach skipped:', err.message);
+      console.log('[PKRelay] Auto-attach on CDP skipped:', err.message);
     }
   }
   // Continue to the normal CDP handler registered by TabManager
