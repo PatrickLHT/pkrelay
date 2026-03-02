@@ -73,12 +73,11 @@ export class TabManager {
     this.tabs.set(tabId, tabState);
     this.tabBySession.set(sessionId, tabId);
 
-    // Notify relay — format must match what OpenClaw's gateway expects
+    // Notify relay — must match stock OpenClaw extension format exactly
     this.relay.send({
       method: 'forwardCDPEvent',
       params: {
         method: 'Target.attachedToTarget',
-        sessionId,
         params: {
           sessionId,
           targetInfo,
@@ -142,12 +141,11 @@ export class TabManager {
       this.childSessionToTab.set(String(params.sessionId), tabId);
     }
 
-    // Forward event to relay
+    // Forward event to relay — match stock format (no outer sessionId)
     this.relay.send({
       method: 'forwardCDPEvent',
       params: {
         method,
-        sessionId: tabState.sessionId,
         params
       }
     });
@@ -402,7 +400,6 @@ export class TabManager {
           method: 'forwardCDPEvent',
           params: {
             method: 'Target.attachedToTarget',
-            sessionId: state.sessionId,
             params: {
               sessionId: state.sessionId,
               targetInfo,
