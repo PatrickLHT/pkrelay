@@ -9,25 +9,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Send Telegram Notification
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
         run: |
-          TITLE="${{ github.event.issue.title }}"
-          BODY=$(echo "${{ github.event.issue.body }}" | head -c 500)
-          AUTHOR="${{ github.event.issue.user.login }}"
-          URL="${{ github.event.issue.html_url }}"
-          LABELS=$(echo '${{ toJSON(github.event.issue.labels) }}' | jq -r '.[].name' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+          BODY_PREVIEW=$(echo "$ISSUE_BODY" | head -c 400 | tr '\n' ' ')
 
-          MESSAGE="🐛 *New PKRelay Issue*
+          # Build message using printf to avoid interpolation issues
+          MESSAGE=$(printf '🐛 New PKRelay Issue\n\n#%s: %s\nBy: %s\n\n%s\n\n%s' \
+            "$ISSUE_NUMBER" "$ISSUE_TITLE" "$ISSUE_AUTHOR" "$BODY_PREVIEW" "$ISSUE_URL")
 
-*#${{ github.event.issue.number }}:* ${TITLE}
-*By:* ${AUTHOR}
-*Labels:* ${LABELS:-none}
-
-${BODY:+_${BODY}_}
-
-[View Issue](${URL})"
-
-          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
-            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
-            -d text="${MESSAGE}" \
-            -d parse_mode="Markdown" \
-            -d disable_web_page_preview="true"
+          curl -sf -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+            --data-urlencode "text=${MESSAGE}" \
+            --data-urlencode "disable_web_page_preview=true"
