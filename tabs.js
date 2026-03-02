@@ -50,16 +50,30 @@ export class TabManager {
     await chrome.debugger.attach({ tabId }, '1.3');
     await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
 
-    const info = await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo');
-    const targetInfo = info?.targetInfo || {};
-    const targetId = String(targetInfo.targetId || '');
+    // Build targetInfo from CDP + chrome.tabs fallback
+    const tab = await chrome.tabs.get(tabId);
+    const info = await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo').catch(() => null);
+    const cdpInfo = info?.targetInfo || {};
+    const targetId = String(cdpInfo.targetId || `tab-${tabId}`);
     const sessionId = `pk-tab-${tabId}-${Date.now()}`;
+
+    // Ensure all fields the gateway needs for /json/list and connectedTargets
+    const targetInfo = {
+      targetId,
+      type: 'page',
+      title: tab.title || '',
+      url: tab.url || '',
+      attached: true,
+      canAccessOpener: false,
+      ...cdpInfo, // Overlay with real CDP data when available
+      attached: true, // Always force this
+    };
 
     const tabState = { state: 'connected', sessionId, targetId };
     this.tabs.set(tabId, tabState);
     this.tabBySession.set(sessionId, tabId);
 
-    // Notify relay
+    // Notify relay — format must match what OpenClaw's gateway expects
     this.relay.send({
       method: 'forwardCDPEvent',
       params: {
@@ -67,7 +81,7 @@ export class TabManager {
         sessionId,
         params: {
           sessionId,
-          targetInfo: { ...targetInfo, attached: true },
+          targetInfo,
           waitingForDebugger: false
         }
       }
@@ -371,7 +385,19 @@ export class TabManager {
     // Called after relay reconnection
     for (const [tabId, state] of this.tabs) {
       try {
-        const info = await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo');
+        const tab = await chrome.tabs.get(tabId);
+        const info = await chrome.debugger.sendCommand({ tabId }, 'Target.getTargetInfo').catch(() => null);
+        const cdpInfo = info?.targetInfo || {};
+        const targetInfo = {
+          targetId: state.targetId,
+          type: 'page',
+          title: tab.title || '',
+          url: tab.url || '',
+          attached: true,
+          canAccessOpener: false,
+          ...cdpInfo,
+          attached: true,
+        };
         this.relay.send({
           method: 'forwardCDPEvent',
           params: {
@@ -379,7 +405,7 @@ export class TabManager {
             sessionId: state.sessionId,
             params: {
               sessionId: state.sessionId,
-              targetInfo: { ...info?.targetInfo, attached: true },
+              targetInfo,
               waitingForDebugger: false
             }
           }
