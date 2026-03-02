@@ -30,6 +30,7 @@ export class RelayConnection {
     this.fastRetryAttempts = 0;
     this.connectedAt = 0;
     this.isDefault = false;
+    this._slotPollTimer = null;
   }
 
   // Register handler for incoming messages by method name
@@ -145,16 +146,18 @@ export class RelayConnection {
       // Health check passed but WebSocket upgrade failed — slot likely taken (409)
       this.slotTaken = true;
 
-      // After too many rejected connection attempts, enter standby
+      // After too many rejected connection attempts, enter standby with periodic polling
       const maxAttempts = this.isDefault ? 8 : 4;
       if (this.fastRetryAttempts >= maxAttempts) {
         this.standbyReason = { targetBrowser: 'another browser', startTime: Date.now() };
         this.fastRetryAttempts = 0;
         this.setState('standby');
+        // Poll every 5-8s for free slot instead of flat 2-min wait
+        this._scheduleSlotPoll();
+        // Hard safety timeout — stop polling after 2 min
         chrome.alarms.create(STANDBY_ALARM, {
           delayInMinutes: CONTENTION_STANDBY_TIMEOUT / 60000
         });
-        setTimeout(() => this.resumeFromStandby(), CONTENTION_STANDBY_TIMEOUT);
         return;
       }
 
@@ -268,11 +271,12 @@ export class RelayConnection {
         this.standbyReason = { targetBrowser: 'another browser', startTime: Date.now() };
         this.fastRetryAttempts = 0;
         this.setState('standby');
-        // Long timeout for contention — don't keep fighting the other browser
+        // Poll every 5-8s for free slot instead of flat 2-min wait
+        this._scheduleSlotPoll();
+        // Hard safety timeout — stop polling after 2 min
         chrome.alarms.create(STANDBY_ALARM, {
           delayInMinutes: CONTENTION_STANDBY_TIMEOUT / 60000
         });
-        setTimeout(() => this.resumeFromStandby(), CONTENTION_STANDBY_TIMEOUT);
         return;
       }
 
@@ -343,6 +347,7 @@ export class RelayConnection {
 
   disconnect() {
     this.stopKeepalive();
+    this._clearSlotPoll();
     chrome.alarms.clear(RECONNECT_ALARM);
     chrome.alarms.clear(STANDBY_ALARM);
     chrome.alarms.clear(FAST_RETRY_ALARM);
@@ -401,11 +406,6 @@ export class RelayConnection {
     this.slotTaken = true;
     this.setState('standby');
 
-    // Grace period: give target browser 2s to connect, then start polling
-    setTimeout(() => {
-      if (this.state === 'standby') this.scheduleFastRetry();
-    }, 2000);
-
     // Safety timeout: force resume if target never connects
     chrome.alarms.create(STANDBY_ALARM, {
       delayInMinutes: STANDBY_TIMEOUT / 60000
@@ -415,12 +415,29 @@ export class RelayConnection {
 
   resumeFromStandby() {
     if (this.state !== 'standby') return;
+    this._clearSlotPoll();
     chrome.alarms.clear(STANDBY_ALARM);
     chrome.alarms.clear(FAST_RETRY_ALARM);
     this.standbyReason = null;
     this.slotTaken = false;
     this.fastRetryAttempts = 0;
     void this.connect();
+  }
+
+  // Poll for free gateway slot during contention standby
+  _scheduleSlotPoll() {
+    this._clearSlotPoll();
+    this._slotPollTimer = setTimeout(() => {
+      if (this.state !== 'standby') return;
+      this.resumeFromStandby();
+    }, 5000 + Math.random() * 3000);
+  }
+
+  _clearSlotPoll() {
+    if (this._slotPollTimer) {
+      clearTimeout(this._slotPollTimer);
+      this._slotPollTimer = null;
+    }
   }
 
   scheduleFastRetry() {
