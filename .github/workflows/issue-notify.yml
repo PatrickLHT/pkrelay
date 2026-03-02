@@ -1,0 +1,33 @@
+name: Issue Notification
+
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Telegram Notification
+        run: |
+          TITLE="${{ github.event.issue.title }}"
+          BODY=$(echo "${{ github.event.issue.body }}" | head -c 500)
+          AUTHOR="${{ github.event.issue.user.login }}"
+          URL="${{ github.event.issue.html_url }}"
+          LABELS=$(echo '${{ toJSON(github.event.issue.labels) }}' | jq -r '.[].name' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+
+          MESSAGE="🐛 *New PKRelay Issue*
+
+*#${{ github.event.issue.number }}:* ${TITLE}
+*By:* ${AUTHOR}
+*Labels:* ${LABELS:-none}
+
+${BODY:+_${BODY}_}
+
+[View Issue](${URL})"
+
+          curl -s -X POST "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d text="${MESSAGE}" \
+            -d parse_mode="Markdown" \
+            -d disable_web_page_preview="true"
