@@ -266,6 +266,15 @@ relay.on('pkrelay.detach', async (msg) => {
   }
 });
 
+// --- Extension reload (callable by agent) ---
+relay.on('pkrelay.reload', async (msg) => {
+  const { id } = msg;
+  relay.send({ id, result: { reloading: true } });
+  // Brief delay to flush the response before we die
+  await new Promise(r => setTimeout(r, 200));
+  chrome.runtime.reload();
+});
+
 // --- Hot-swap browser switching ---
 relay.on('pkrelay.switchBrowser', async (msg) => {
   const { id, params } = msg;
