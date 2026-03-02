@@ -150,6 +150,37 @@ relay.on('pkrelay.screenshot', async (msg) => {
   }
 });
 
+// --- Auto-discover: when stock CDP asks for targets and none are attached,
+//     auto-attach the active tab (with permission flow) so the agent can see it.
+//     This bridges the gap between OpenClaw's stock CDP protocol and PKRelay's
+//     permission-based tab system.
+const _origCDPHandler = relay.messageHandlers.get('forwardCDPCommand');
+relay.messageHandlers.delete('forwardCDPCommand');
+relay.on('forwardCDPCommand', async (msg) => {
+  const { method } = msg.params || {};
+
+  // Intercept Target.getTargets when no tabs are attached
+  if (method === 'Target.getTargets') {
+    const attached = tabMgr.getAttachedTabs();
+    if (attached.size === 0) {
+      // No tabs attached — try to auto-attach the active tab
+      try {
+        const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (activeTab && activeTab.url && !activeTab.url.startsWith('chrome')) {
+          await tabMgr.enforcePermission(activeTab.id);
+          await tabMgr.attachTab(activeTab.id);
+          await new Promise(r => setTimeout(r, 200));
+        }
+      } catch (err) {
+        // Permission denied or no suitable tab — fall through to normal handler
+        console.log('[PKRelay] Auto-attach skipped:', err.message);
+      }
+    }
+  }
+  // Continue to the normal CDP handler registered by TabManager
+  tabMgr.handleCDPCommand(msg);
+});
+
 // --- Tab listing handler ---
 relay.on('pkrelay.tabs', async (msg) => {
   const { id } = msg;
