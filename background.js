@@ -93,6 +93,7 @@ relay.onStateChange = (state) => {
   updateGlobalBadge();
   notifyPopup();
   if (state === 'connected') {
+    tabMgr.clearUserDetached(); // Fresh connection = fresh start
     tabMgr.reannounceAll();
     autoAttachActiveTab();
   }
@@ -110,6 +111,12 @@ async function autoAttachActiveTab() {
     const level = perms.getLevel(activeTab.url);
     if (level !== 'full') {
       console.log(`[PKRelay] Auto-attach skipped: tab ${activeTab.id} has "${level}" permission (need "full")`);
+      return;
+    }
+
+    // Respect user manual detach
+    if (tabMgr.isUserDetached(activeTab.id)) {
+      console.log(`[PKRelay] Auto-attach skipped: tab ${activeTab.id} was manually detached`);
       return;
     }
 
@@ -197,7 +204,7 @@ relay.on('forwardCDPCommand', async (msg) => {
       const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       if (activeTab && activeTab.url && !activeTab.url.startsWith('chrome')) {
         const level = perms.getLevel(activeTab.url);
-        if (level === 'full') {
+        if (level === 'full' && !tabMgr.isUserDetached(activeTab.id)) {
           await tabMgr.attachTab(activeTab.id);
           await new Promise(r => setTimeout(r, 200));
           console.log(`[PKRelay] Auto-attached tab ${activeTab.id} on CDP command`);

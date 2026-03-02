@@ -8,6 +8,7 @@ export class TabManager {
     this.tabBySession = new Map();    // sessionId -> tabId
     this.childSessionToTab = new Map(); // childSessionId -> tabId
     this.debuggerListening = false;
+    this.userDetached = new Set();  // tabIds user manually detached (suppresses auto-attach)
     this.onTabChange = null;       // callback(tabId, attached)
   }
 
@@ -46,6 +47,9 @@ export class TabManager {
 
   async attachTab(tabId) {
     if (this.tabs.has(tabId)) return this.tabs.get(tabId);
+
+    // Clear user-detached flag — explicit attach overrides it
+    this.userDetached.delete(tabId);
 
     await chrome.debugger.attach({ tabId }, '1.3');
     await chrome.debugger.sendCommand({ tabId }, 'Page.enable');
@@ -95,6 +99,11 @@ export class TabManager {
     const tabState = this.tabs.get(tabId);
     if (!tabState) return;
 
+    // Track user-initiated detaches to suppress auto-attach
+    if (reason === 'toggle' || reason === 'agent') {
+      this.userDetached.add(tabId);
+    }
+
     // Notify relay
     if (tabState.sessionId) {
       this.relay.send({
@@ -130,6 +139,14 @@ export class TabManager {
     } else {
       await this.attachTab(tabId);
     }
+  }
+
+  isUserDetached(tabId) {
+    return this.userDetached.has(tabId);
+  }
+
+  clearUserDetached() {
+    this.userDetached.clear();
   }
 
   onDebuggerEvent(tabId, method, params) {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "PKRelay",
-  "version": "1.6.3",
+  "version": "1.6.4",
   "description": "Token-efficient browser relay for AI agent interaction. Replaces stock OpenClaw Browser Relay with structured perception, high-level actions, and multi-browser support.",
   "permissions": [
     "debugger",
