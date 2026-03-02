@@ -129,7 +129,7 @@ export class RelayConnection {
     try {
       await this.openWebSocket();
       this.connectedAt = Date.now();
-      this.lastPongTime = Date.now(); // Enable stale-pong detection from the start
+      this.lastPongTime = 0; // Reset — stale check disabled until first pong arrives
       // Note: don't reset fastRetryAttempts here — only reset after stable connection
       // (see onRelayDisconnected which checks connDuration)
       this.slotTaken = false;
@@ -322,8 +322,9 @@ export class RelayConnection {
         void this.connect();
         return;
       }
-      // Check if last pong is stale (dead connection)
-      if (this.lastPongTime > 0 && Date.now() - this.lastPongTime > PONG_TIMEOUT * 2) {
+      // Check if last pong is stale (dead connection) — must exceed 2 keepalive cycles
+      const stalePongThreshold = KEEPALIVE_INTERVAL_MIN * 60000 * 2 + PONG_TIMEOUT;
+      if (this.lastPongTime > 0 && Date.now() - this.lastPongTime > stalePongThreshold) {
         this.ws.close(); // Will trigger onRelayDisconnected
         return;
       }
