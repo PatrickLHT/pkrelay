@@ -33,6 +33,13 @@ function setBadge(tabId, state) {
   chrome.action.setBadgeBackgroundColor({ ...opts, color: cfg.bg });
 }
 
+// Notify popup of state changes (real-time UI updates)
+function notifyPopup() {
+  chrome.runtime.sendMessage({ type: 'stateChanged' }).catch(() => {
+    // Popup not open — ignore
+  });
+}
+
 function updateGlobalBadge() {
   const attached = tabMgr.getAttachedTabs();
   if (relay.state !== 'connected') {
@@ -74,6 +81,7 @@ tabMgr.setPermissionManager(perms);
 tabMgr.onTabChange = (tabId, attached) => {
   updateTabBadge(tabId);
   updateGlobalBadge();
+  notifyPopup();
 };
 tabMgr.init();
 
@@ -83,6 +91,7 @@ relay.connect();
 // On relay state change, update badge and re-announce
 relay.onStateChange = (state) => {
   updateGlobalBadge();
+  notifyPopup();
   if (state === 'connected') {
     tabMgr.reannounceAll();
     autoAttachActiveTab();

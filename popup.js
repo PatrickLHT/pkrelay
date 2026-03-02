@@ -273,5 +273,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'complete' || changeInfo.title) refresh();
 });
 
+// Listen for state pushes from background (instant updates)
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'stateChanged') refresh();
+});
+
+// Live polling while popup is open (catches anything else)
+let pollTimer = setInterval(refresh, 2000);
+window.addEventListener('unload', () => clearInterval(pollTimer));
+
 // Initial load
 refresh();
