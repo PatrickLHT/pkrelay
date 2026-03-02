@@ -98,18 +98,21 @@ function renderTabs(tabs, isFullBrowser) {
     const item = document.createElement('div');
     item.className = 'tab-item';
 
-    // Indicator dot
-    const indicator = document.createElement('span');
-    indicator.className = 'tab-indicator';
+    // Connect/Disconnect toggle button
+    const toggle = document.createElement('button');
+    toggle.className = 'tab-toggle';
     if (tab.hasPendingRequest) {
-      indicator.classList.add('pending');
+      toggle.classList.add('pending');
+      toggle.textContent = 'Pending';
+      toggle.disabled = true;
     } else if (tab.attached) {
-      indicator.classList.add('attached');
+      toggle.classList.add('connected');
+      toggle.textContent = 'On';
     } else {
-      indicator.classList.add('detached');
+      toggle.classList.add('disconnected');
+      toggle.textContent = 'Off';
     }
-    indicator.title = tab.attached ? 'Debugger attached' : 'Not attached';
-    item.appendChild(indicator);
+    item.appendChild(toggle);
 
     // Tab info
     const info = document.createElement('div');
@@ -156,10 +159,10 @@ function renderTabs(tabs, isFullBrowser) {
     permWrapper.appendChild(select);
     item.appendChild(permWrapper);
 
-    // Click indicator to toggle attach/detach
-    indicator.style.cursor = 'pointer';
-    indicator.addEventListener('click', (e) => {
+    // Click toggle to attach/detach
+    toggle.addEventListener('click', (e) => {
       e.stopPropagation();
+      toggle.disabled = true;
       chrome.runtime.sendMessage({ type: 'toggleTab', tabId: tab.tabId }, () => {
         refresh();
       });
@@ -205,7 +208,12 @@ $('#browserLevel').addEventListener('change', (e) => {
   }, () => refresh());
 });
 
-$('#refreshBtn').addEventListener('click', refresh);
+$('#refreshBtn').addEventListener('click', async () => {
+  const btn = $('#refreshBtn');
+  btn.classList.add('spinning');
+  await refresh();
+  setTimeout(() => btn.classList.remove('spinning'), 300);
+});
 
 $('#switchBtn').addEventListener('click', () => {
   const target = $('#browserSelect').value;

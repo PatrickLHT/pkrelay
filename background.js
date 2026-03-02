@@ -328,6 +328,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg.type === 'setPermission') {
     perms.setRule(msg.pattern, msg.level);
+    // Auto-attach/detach tabs matching this pattern based on new permission level
+    if (msg.level === 'full' || msg.level === 'none') {
+      (async () => {
+        const allTabs = await chrome.tabs.query({});
+        for (const tab of allTabs) {
+          if (!tab.url || tab.url.startsWith('chrome')) continue;
+          if (!perms.matchPattern(msg.pattern, tab.url)) continue;
+          if (msg.level === 'full' && !tabMgr.isAttached(tab.id) && relay.state === 'connected') {
+            tabMgr.attachTab(tab.id).catch(() => {});
+          } else if (msg.level === 'none' && tabMgr.isAttached(tab.id)) {
+            tabMgr.detachTab(tab.id, 'permission').catch(() => {});
+          }
+        }
+      })();
+    }
     sendResponse({ ok: true });
   }
   if (msg.type === 'setBrowserLevel') {
