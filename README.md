@@ -22,7 +22,7 @@ Token-efficient browser relay for AI agent interaction. Drop-in replacement for 
 
 1. Clone this repo:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/pkrelay.git
+   git clone https://github.com/PatrickLHT/pkrelay.git
    ```
 
 2. Load the unpacked extension:
