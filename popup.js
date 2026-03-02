@@ -234,7 +234,28 @@ $('#connectBtn').addEventListener('click', () => {
 });
 
 $('#updateBtn').addEventListener('click', () => {
-  chrome.runtime.reload();
+  const btn = $('#updateBtn');
+  btn.textContent = 'Checking...';
+  btn.disabled = true;
+
+  chrome.runtime.sendNativeMessage('com.pkrelay.token_reader', { action: 'pullUpdate' }, (resp) => {
+    if (chrome.runtime.lastError) {
+      // Native messaging not available — fall back to just reloading from disk
+      chrome.runtime.reload();
+      return;
+    }
+    if (resp?.updated) {
+      btn.textContent = resp.version ? `Updated to v${resp.version}!` : 'Updated!';
+      setTimeout(() => chrome.runtime.reload(), 1000);
+    } else if (resp?.upToDate) {
+      btn.textContent = 'Up to date';
+      setTimeout(() => { btn.textContent = 'Update'; btn.disabled = false; }, 2000);
+    } else {
+      btn.textContent = 'Error';
+      btn.title = resp?.error || 'Unknown error';
+      setTimeout(() => { btn.textContent = 'Update'; btn.disabled = false; btn.title = 'Check for updates from GitHub'; }, 3000);
+    }
+  });
 });
 
 $('#resumeBtn').addEventListener('click', () => {

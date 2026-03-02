@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""PKRelay Native Messaging Host — reads OpenClaw gateway config."""
-import json, struct, sys, os
+"""PKRelay Native Messaging Host — reads config and handles updates."""
+import json, struct, sys, os, subprocess
 
 
 def read_message():
@@ -18,16 +18,78 @@ def send_message(msg):
     sys.stdout.buffer.flush()
 
 
-try:
-    read_message()  # Consume the incoming request (required by protocol)
+def get_config():
     config_path = os.path.expanduser('~/.openclaw/openclaw.json')
     with open(config_path) as f:
         config = json.load(f)
     gw = config.get('gateway', {})
     auth = gw.get('auth', {})
-    send_message({
+    return {
         'token': auth.get('token', ''),
         'port': gw.get('port', 18792)
-    })
+    }
+
+
+def get_extension_dir():
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def git_run(*args):
+    result = subprocess.run(
+        ['git', '-C', get_extension_dir()] + list(args),
+        capture_output=True, text=True, timeout=30
+    )
+    return result
+
+
+def pull_update():
+    ext_dir = get_extension_dir()
+
+    # Fetch latest from origin
+    fetch = git_run('fetch', 'origin', 'main')
+    if fetch.returncode != 0:
+        return {'error': f'git fetch failed: {fetch.stderr.strip()}'}
+
+    # Check if there are new commits
+    log = git_run('log', 'HEAD..origin/main', '--oneline')
+    if log.returncode != 0:
+        return {'error': f'git log failed: {log.stderr.strip()}'}
+
+    commits = log.stdout.strip()
+    if not commits:
+        return {'upToDate': True}
+
+    # Pull the updates
+    pull = git_run('pull', 'origin', 'main')
+    if pull.returncode != 0:
+        return {'error': f'git pull failed: {pull.stderr.strip()}'}
+
+    # Read new version from manifest
+    version = None
+    try:
+        manifest_path = os.path.join(ext_dir, 'manifest.json')
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        version = manifest.get('version')
+    except Exception:
+        pass
+
+    return {
+        'updated': True,
+        'version': version,
+        'commits': commits
+    }
+
+
+try:
+    msg = read_message()
+    action = msg.get('action', 'getConfig') if msg else 'getConfig'
+
+    if action == 'getConfig':
+        send_message(get_config())
+    elif action == 'pullUpdate':
+        send_message(pull_update())
+    else:
+        send_message({'error': f'Unknown action: {action}'})
 except Exception as e:
     send_message({'error': str(e)})
