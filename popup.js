@@ -248,13 +248,15 @@ $('#updateBtn').addEventListener('click', () => {
 
   chrome.runtime.sendNativeMessage('com.pkrelay.token_reader', { action: 'pullUpdate' }, (resp) => {
     if (chrome.runtime.lastError) {
-      // Native messaging not available — fall back to just reloading from disk
-      chrome.runtime.reload();
+      btn.textContent = 'Unavailable';
+      btn.title = 'Native messaging not configured';
+      setTimeout(() => { btn.textContent = 'Update'; btn.disabled = false; btn.title = 'Check for updates from GitHub'; }, 2000);
       return;
     }
     if (resp?.updated) {
-      btn.textContent = resp.version ? `Updated to v${resp.version}!` : 'Updated!';
-      setTimeout(() => chrome.runtime.reload(), 1000);
+      btn.textContent = resp.version ? `v${resp.version} — Reload` : 'Reload';
+      btn.disabled = false;
+      btn.onclick = () => chrome.runtime.reload();
     } else if (resp?.upToDate) {
       btn.textContent = 'Up to date';
       setTimeout(() => { btn.textContent = 'Update'; btn.disabled = false; }, 2000);
