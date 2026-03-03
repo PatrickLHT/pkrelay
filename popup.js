@@ -248,15 +248,15 @@ $('#updateBtn').addEventListener('click', () => {
 
   chrome.runtime.sendNativeMessage('com.pkrelay.token_reader', { action: 'pullUpdate' }, (resp) => {
     if (chrome.runtime.lastError) {
-      btn.textContent = 'Unavailable';
-      btn.title = 'Native messaging not configured';
-      setTimeout(() => { btn.textContent = 'Update'; btn.disabled = false; btn.title = 'Check for updates from GitHub'; }, 2000);
+      // Native messaging not available — fall back to just reloading from disk
+      chrome.storage.local.set({ updateFlash: 'Reloaded from disk' });
+      chrome.runtime.reload();
       return;
     }
     if (resp?.updated) {
-      btn.textContent = resp.version ? `v${resp.version} — Reload` : 'Reload';
-      btn.disabled = false;
-      btn.onclick = () => chrome.runtime.reload();
+      const msg = resp.version ? `Updated to v${resp.version}!` : 'Updated!';
+      chrome.storage.local.set({ updateFlash: msg });
+      chrome.runtime.reload();
     } else if (resp?.upToDate) {
       btn.textContent = 'Up to date';
       setTimeout(() => { btn.textContent = 'Update'; btn.disabled = false; }, 2000);
@@ -294,3 +294,14 @@ window.addEventListener('unload', () => clearInterval(pollTimer));
 
 // Initial load
 refresh();
+
+// Show update flash message if we just reloaded after an update
+chrome.storage.local.get(['updateFlash'], (stored) => {
+  if (stored.updateFlash) {
+    chrome.storage.local.remove('updateFlash');
+    const btn = $('#updateBtn');
+    btn.textContent = stored.updateFlash;
+    btn.disabled = true;
+    setTimeout(() => { btn.textContent = 'Update'; btn.disabled = false; btn.title = 'Check for updates from GitHub'; }, 3000);
+  }
+});
