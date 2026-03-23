@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "PKRelay",
-  "version": "1.7.2",
-  "description": "Token-efficient browser relay for AI agent interaction. Replaces stock OpenClaw Browser Relay with structured perception, high-level actions, and multi-browser support.",
+  "version": "2.0.0",
+  "description": "Token-efficient CDP server bridge for AI agent interaction. Exposes attached tabs as a CDP endpoint on port 18792 for OpenClaw and other agents to connect directly.",
   "permissions": [
     "debugger",
     "tabs",

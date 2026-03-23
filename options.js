@@ -1,35 +1,37 @@
-// options.js — PKRelay settings page logic
+// options.js — PKRelay settings page logic (v2.0 CDP Server mode)
 
 const $ = (sel) => document.querySelector(sel);
 
 async function load() {
-  const stored = await chrome.storage.local.get(['browserName', 'relayPort', 'relayToken', 'isDefault', 'knownBrowsers']);
+  const stored = await chrome.storage.local.get([
+    'browserName', 'cdpServerPort', 'relayPort', 'isDefault', 'knownBrowsers'
+  ]);
   $('#browserName').value = stored.browserName || '';
-  $('#relayPort').value = stored.relayPort || 18792;
-  $('#relayToken').value = stored.relayToken || '';
+  // Migrate from old relayPort key → cdpServerPort
+  $('#cdpServerPort').value = stored.cdpServerPort || stored.relayPort || 18792;
   $('#isDefault').checked = !!stored.isDefault;
   $('#knownBrowsers').value = (stored.knownBrowsers || []).join(', ');
 }
 
 async function save() {
   const browserName = $('#browserName').value.trim();
-  const relayPort = parseInt($('#relayPort').value, 10);
-  const relayToken = $('#relayToken').value.trim();
+  const cdpServerPort = parseInt($('#cdpServerPort').value, 10);
   const isDefault = $('#isDefault').checked;
   const knownBrowsers = $('#knownBrowsers').value
     .split(',')
     .map(s => s.trim())
     .filter(Boolean);
 
-  if (!relayPort || relayPort < 1 || relayPort > 65535) {
+  if (!cdpServerPort || cdpServerPort < 1 || cdpServerPort > 65535) {
     showStatus('error', 'Port must be 1-65535');
     return;
   }
 
   await chrome.storage.local.set({
     browserName: browserName || 'Browser',
-    relayPort,
-    relayToken,
+    cdpServerPort,
+    // Also write relayPort for backward compat with old options.js reads
+    relayPort: cdpServerPort,
     isDefault,
     knownBrowsers
   });
@@ -38,22 +40,24 @@ async function save() {
 }
 
 async function testConnection() {
-  const port = parseInt($('#relayPort').value, 10) || 18792;
+  const port = parseInt($('#cdpServerPort').value, 10) || 18792;
   showStatus('checking', 'Checking...');
 
   try {
-    const url = `http://127.0.0.1:${port}/`;
+    // CDP bridge responds at /json/version
+    const url = `http://127.0.0.1:${port}/json/version`;
     const resp = await fetch(url, {
-      method: 'HEAD',
       signal: AbortSignal.timeout(2000)
     });
-    if (resp.ok || resp.status < 500) {
-      showStatus('ok', `Connected (port ${port})`);
+    if (resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      const version = data.Browser || 'OK';
+      showStatus('ok', `CDP server running (${version}) — port ${port}`);
     } else {
       showStatus('error', `Server error: ${resp.status}`);
     }
   } catch (err) {
-    showStatus('error', `Cannot reach port ${port}`);
+    showStatus('error', `CDP server not reachable on port ${port} — run ./install.sh`);
   }
 }
 
@@ -79,19 +83,16 @@ $('#testBtn').addEventListener('click', testConnection);
 
 load();
 
-// Test native messaging host availability
+// Test native messaging host availability (CDP bridge)
 try {
-  chrome.runtime.sendNativeMessage('com.pkrelay.token_reader', { action: 'getConfig' }, (resp) => {
-    const el = $('#tokenAutoStatus');
+  chrome.runtime.sendNativeMessage('com.pkrelay.cdp_server', { type: 'ping' }, (resp) => {
+    const el = $('#nmStatus');
     if (chrome.runtime.lastError) {
-      el.textContent = 'Native host not installed. Run ./install.sh to enable auto-read.';
-      el.style.color = '#666';
-    } else if (resp?.token) {
-      el.textContent = 'Auto-read from ~/.openclaw/openclaw.json (native host active)';
-      el.style.color = '#22C55E';
-    } else if (resp?.error) {
-      el.textContent = 'Native host error: ' + resp.error;
+      el.textContent = 'CDP bridge not installed. Run ./install.sh to set up.';
       el.style.color = '#EF4444';
+    } else if (resp) {
+      el.textContent = 'CDP bridge native host active ✓';
+      el.style.color = '#22C55E';
     }
   });
 } catch {}

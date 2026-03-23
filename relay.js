@@ -1,312 +1,212 @@
-// relay.js — WebSocket connection to OpenClaw gateway relay
+// relay.js — Native messaging relay to PKRelay CDP bridge server (v2.0)
+//
+// Architecture change (OpenClaw 2026.3.22+):
+//   OLD: Extension connects as WebSocket CLIENT to ws://127.0.0.1:18792/extension
+//   NEW: server.py runs a CDP SERVER on port 18792; extension communicates with
+//        it via chrome.runtime.connectNative (native messaging port)
+//
+// Communication flow:
+//   OpenClaw → HTTP/WS → server.py → NM port → background.js (here) → chrome.debugger
+//
+// This module maintains the native messaging port connection and provides the
+// same send/on/request interface that background.js and tabs.js use.
 
 const KEEPALIVE_ALARM = 'pkrelay-keepalive';
 const RECONNECT_ALARM = 'pkrelay-reconnect';
-const STANDBY_ALARM = 'pkrelay-standby-resume';
-const FAST_RETRY_ALARM = 'pkrelay-fast-retry';
 const KEEPALIVE_INTERVAL_MIN = 0.42; // ~25 seconds
 const MAX_RECONNECT_DELAY = 30000;
-const MAX_FAST_RETRY_DELAY = 5000;   // 5s cap for slot-taken retries
-const STANDBY_TIMEOUT = 15000;            // 15s for intentional browser switches
-const CONTENTION_STANDBY_TIMEOUT = 120000; // 2min for slot contention
-const HEALTH_CHECK_TIMEOUT = 2000;
-const WS_CONNECT_TIMEOUT = 3000;
-const PONG_TIMEOUT = 5000;
+const NM_HOST_NAME = 'com.pkrelay.cdp_server';
 
 export class RelayConnection {
   constructor() {
-    this.ws = null;
-    this.port = 18792;
-    this.token = '';
+    this.port = null;           // Native messaging port (chrome.runtime.Port)
+    this.cdpPort = 18792;      // CDP server port (for display/options only)
     this.reconnectAttempts = 0;
-    this.state = 'disconnected'; // disconnected | connecting | connected | reconnecting | standby
+    this.state = 'disconnected'; // disconnected | connecting | connected | reconnecting
     this.messageHandlers = new Map(); // method -> handler function
-    this.pendingRequests = new Map(); // id -> { resolve, reject, timer }
-    this.nextRequestId = 1;
-    this.lastPongTime = 0;
+    this.pendingRequests = new Map(); // nmId -> { resolve, reject, timer }
+    this.nextNmId = 1;
     this.onStateChange = null; // callback(newState)
-    this.standbyReason = null;     // { targetBrowser, startTime }
-    this.slotTaken = false;        // true when gateway up but slot taken
-    this.fastRetryAttempts = 0;
     this.connectedAt = 0;
+
+    // Compatibility shims (kept for callers that reference these)
+    this.standbyReason = null;
+    this.slotTaken = false;
+    this.fastRetryAttempts = 0;
     this.isDefault = false;
-    this._slotPollTimer = null;
   }
 
-  // Register handler for incoming messages by method name
+  // ── Public API (same interface as old RelayConnection) ─────────────────────
+
+  /** Register handler for incoming messages from server.py by method name */
   on(method, handler) {
     this.messageHandlers.set(method, handler);
   }
 
-  // Send message to relay
-  send(message) {
-    if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(message));
-    }
-  }
-
-  // Send request and await response (for messages with id)
+  /** Send a request and await the response (uses nmId round-trip). */
   async request(method, params, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
-      const id = this.nextRequestId++;
+      const nmId = this.nextNmId++;
       const timer = setTimeout(() => {
-        this.pendingRequests.delete(id);
+        this.pendingRequests.delete(nmId);
         reject(new Error(`Request ${method} timed out`));
       }, timeoutMs);
-      this.pendingRequests.set(id, { resolve, reject, timer });
-      this.send({ id, method, params });
+      this.pendingRequests.set(nmId, { resolve, reject, timer });
+      this.send({ nmId, method, params });
     });
   }
+
+  // ── Config ─────────────────────────────────────────────────────────────────
 
   async loadConfig() {
-    const stored = await chrome.storage.local.get(['relayPort', 'relayToken', 'isDefault']);
-    this.port = Number(stored.relayPort) || 18792;
-    this.token = stored.relayToken || '';
+    const stored = await chrome.storage.local.get(['cdpServerPort', 'relayPort', 'isDefault']);
+    // cdpServerPort is the new key; fall back to relayPort for migration
+    this.cdpPort = Number(stored.cdpServerPort || stored.relayPort) || 18792;
     this.isDefault = !!stored.isDefault;
-
-    // If no manual token, try native messaging to read from openclaw.json
-    if (!this.token) {
-      try {
-        const config = await this.readNativeConfig();
-        if (config.token) this.token = config.token;
-        // Note: don't use config.port — openclaw.json has the main gateway port,
-        // but extensions connect to the separate extension port (default 18792)
-      } catch {}
-    }
   }
 
-  readNativeConfig() {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('Native messaging timeout')), 2000);
-      try {
-        chrome.runtime.sendNativeMessage(
-          'com.pkrelay.token_reader',
-          { action: 'getConfig' },
-          (response) => {
-            clearTimeout(timer);
-            if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
-              return;
-            }
-            if (response?.error) {
-              reject(new Error(response.error));
-              return;
-            }
-            resolve(response || {});
-          }
-        );
-      } catch (err) {
-        clearTimeout(timer);
-        reject(err);
-      }
-    });
-  }
-
-  async healthCheck() {
-    const url = `http://127.0.0.1:${this.port}/`;
-    const resp = await fetch(url, {
-      method: 'HEAD',
-      signal: AbortSignal.timeout(HEALTH_CHECK_TIMEOUT)
-    });
-    return resp.ok || resp.status < 500;
-  }
+  // ── Connection lifecycle ───────────────────────────────────────────────────
 
   async connect() {
-    if (this.state === 'connecting') return;
-    const wasStandby = this.state === 'standby';
+    if (this.state === 'connecting' || this.state === 'connected') return;
+    console.log(`[PKRelay] connect() — state=${this.state}`);
     this.setState('connecting');
     await this.loadConfig();
 
     try {
-      await this.healthCheck();
-    } catch {
-      this.slotTaken = false;
+      this._openNativePort();
+      // State transitions to 'connected' when server.py sends 'serverStarted'
+      // or after a brief grace period (server might already be running)
+    } catch (err) {
+      console.log('[PKRelay] NM connect failed:', err.message);
       this.setState('disconnected');
       this.scheduleReconnect();
+    }
+  }
+
+  _openNativePort() {
+    console.log('[PKRelay] Opening native messaging port:', NM_HOST_NAME);
+    const port = chrome.runtime.connectNative(NM_HOST_NAME);
+    this.port = port;
+
+    port.onMessage.addListener((msg) => this._handleNativeMessage(msg));
+
+    port.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError;
+      console.log('[PKRelay] NM port disconnected:', err?.message || 'no error');
+      this.port = null;
+      this._onDisconnected();
+    });
+
+    // Give the server a moment to start (it sends 'serverStarted' when ready)
+    // But also set connected optimistically after a short timeout so auto-attach works
+    setTimeout(() => {
+      if (this.state === 'connecting' && this.port) {
+        console.log('[PKRelay] NM port assumed ready');
+        this._onConnected();
+      }
+    }, 500);
+  }
+
+  _handleNativeMessage(msg) {
+    if (!msg || typeof msg !== 'object') return;
+
+    const type = msg.type;
+
+    // Server lifecycle
+    if (type === 'serverStarted') {
+      console.log('[PKRelay] CDP server started on port', msg.port);
+      if (this.state === 'connecting') {
+        this._onConnected();
+      }
       return;
     }
 
-    try {
-      await this.openWebSocket();
-      this.connectedAt = Date.now();
-      this.lastPongTime = 0; // Reset — stale check disabled until first pong arrives
-      // Note: don't reset fastRetryAttempts here — only reset after stable connection
-      // (see onRelayDisconnected which checks connDuration)
-      this.slotTaken = false;
-      this.setState('connected');
-      this.startKeepalive();
-      chrome.alarms.clear(RECONNECT_ALARM);
-      chrome.alarms.clear(FAST_RETRY_ALARM);
-      if (wasStandby) {
-        this.standbyReason = null;
-        chrome.alarms.clear(STANDBY_ALARM);
-      }
-      await this.announceIdentity();
-    } catch {
-      // Health check passed but WebSocket upgrade failed — slot likely taken (409)
-      this.slotTaken = true;
-
-      // After too many rejected connection attempts, enter standby with periodic polling
-      const maxAttempts = this.isDefault ? 8 : 4;
-      if (this.fastRetryAttempts >= maxAttempts) {
-        this.standbyReason = { targetBrowser: 'another browser', startTime: Date.now() };
-        this.fastRetryAttempts = 0;
-        this.setState('standby');
-        // Poll every 5-8s for free slot instead of flat 2-min wait
-        this._scheduleSlotPoll();
-        // Hard safety timeout — stop polling after 2 min
-        chrome.alarms.create(STANDBY_ALARM, {
-          delayInMinutes: CONTENTION_STANDBY_TIMEOUT / 60000
-        });
-        return;
-      }
-
-      this.setState(wasStandby ? 'standby' : 'disconnected');
-      this.scheduleFastRetry();
-    }
-  }
-
-  async announceIdentity() {
-    const stored = await chrome.storage.local.get(['browserName', 'browserId', 'isDefault']);
-    let browserId = stored.browserId;
-    if (!browserId) {
-      browserId = `pkrelay-${crypto.randomUUID().slice(0, 8)}`;
-      await chrome.storage.local.set({ browserId });
-    }
-    this.send({
-      method: 'relay.announce',
-      params: {
-        browserName: stored.browserName || 'Browser',
-        browserId,
-        isDefault: !!stored.isDefault,
-        extensionVersion: chrome.runtime.getManifest().version,
-        capabilities: ['snapshot', 'actions', 'screenshot', 'diff', 'permissions', 'hot-swap']
-      }
-    });
-  }
-
-  openWebSocket() {
-    return new Promise((resolve, reject) => {
-      const tokenParam = this.token ? `?token=${encodeURIComponent(this.token)}` : '';
-      const url = `ws://127.0.0.1:${this.port}/extension${tokenParam}`;
-      const ws = new WebSocket(url);
-      const timer = setTimeout(() => {
-        ws.close();
-        reject(new Error('WebSocket connect timeout'));
-      }, WS_CONNECT_TIMEOUT);
-
-      ws.onopen = () => {
-        clearTimeout(timer);
-        this.ws = ws;
-        resolve();
-      };
-
-      ws.onclose = () => {
-        clearTimeout(timer);
-        if (this.ws === ws) {
-          this.ws = null;
-          this.onRelayDisconnected();
-        } else {
-          reject(new Error('WebSocket closed before open'));
-        }
-      };
-
-      ws.onerror = () => {}; // onclose always follows
-
-      ws.onmessage = (event) => this.handleMessage(event);
-    });
-  }
-
-  handleMessage(event) {
-    let msg;
-    try { msg = JSON.parse(event.data); } catch { return; }
-
-    // Handle pong
-    if (msg.method === 'pong') {
-      this.lastPongTime = Date.now();
+    // CDP command from a WS client (OpenClaw) → dispatch to our handlers
+    if (type === 'cdpCommand') {
+      const { nmId, wsId, sessionId, targetId, method, params } = msg;
+      this._dispatchCDPCommand({ nmId, wsId, sessionId, targetId, method, params });
       return;
     }
 
-    // Handle response to our request
-    if (msg.id != null && this.pendingRequests.has(msg.id)) {
-      const { resolve, reject, timer } = this.pendingRequests.get(msg.id);
+    // WS client connected/disconnected lifecycle
+    if (type === 'cdpClientConnected') {
+      console.log('[PKRelay] CDP client connected, session:', msg.sessionId);
+      // Re-announce all attached tabs so OpenClaw sees them
+      const handler = this.messageHandlers.get('_clientConnected');
+      if (handler) Promise.resolve(handler(msg)).catch(() => {});
+      return;
+    }
+
+    if (type === 'cdpClientDisconnected') {
+      console.log('[PKRelay] CDP client disconnected, session:', msg.sessionId);
+      return;
+    }
+
+    // Response to a request we sent (nmId echo)
+    if (msg.nmId != null && this.pendingRequests.has(msg.nmId)) {
+      const { resolve, reject, timer } = this.pendingRequests.get(msg.nmId);
       clearTimeout(timer);
-      this.pendingRequests.delete(msg.id);
+      this.pendingRequests.delete(msg.nmId);
       if (msg.error) reject(new Error(msg.error));
       else resolve(msg.result);
       return;
     }
 
-    // Handle ping from relay
-    if (msg.method === 'ping') {
-      this.send({ method: 'pong' });
-      return;
+    // Fallback: dispatch to registered handler by method
+    if (msg.method) {
+      const handler = this.messageHandlers.get(msg.method);
+      if (handler) {
+        Promise.resolve(handler(msg)).catch(() => {});
+      }
     }
+  }
 
-    // Dispatch to registered handler
-    const handler = this.messageHandlers.get(msg.method);
+  /**
+   * Dispatch an incoming CDP command from OpenClaw (via server.py).
+   * Maps to the old relay.on('forwardCDPCommand', ...) interface so
+   * tabs.js and background.js handlers still work unchanged.
+   */
+  _dispatchCDPCommand({ nmId, wsId, sessionId, targetId, method, params }) {
+    // Build a message that looks like the old gateway forwardCDPCommand
+    const msg = {
+      id: nmId,         // used by relay.send({ id, result }) below
+      _wsId: wsId,      // original CDP id from WS client
+      params: { sessionId, targetId, method, params }
+    };
+
+    const handler = this.messageHandlers.get('forwardCDPCommand');
     if (handler) {
       Promise.resolve(handler(msg)).catch(() => {});
     }
   }
 
-  onRelayDisconnected() {
+  _onConnected() {
+    this.connectedAt = Date.now();
+    this.reconnectAttempts = 0;
+    this.setState('connected');
+    console.log('[PKRelay] NM connected to CDP bridge');
+    this.startKeepalive();
+    chrome.alarms.clear(RECONNECT_ALARM);
+  }
+
+  _onDisconnected() {
+    const connDuration = Date.now() - (this.connectedAt || 0);
+    console.log(`[PKRelay] NM disconnected — connDuration=${connDuration}ms`);
     this.stopKeepalive();
+
     // Reject all pending requests
     for (const [id, { reject, timer }] of this.pendingRequests) {
       clearTimeout(timer);
-      reject(new Error('Relay disconnected'));
+      reject(new Error('NM disconnected'));
     }
     this.pendingRequests.clear();
 
-    const connDuration = Date.now() - (this.connectedAt || 0);
-    if (connDuration < 5000) {
-      // Connection dropped almost immediately — another browser likely took the slot
-      this.slotTaken = true;
-
-      // After several rapid disconnections, stop fighting and enter standby
-      // Default browser gets more attempts before yielding
-      const maxAttempts = this.isDefault ? 8 : 4;
-      if (this.fastRetryAttempts >= maxAttempts) {
-        this.standbyReason = { targetBrowser: 'another browser', startTime: Date.now() };
-        this.fastRetryAttempts = 0;
-        this.setState('standby');
-        // Poll every 5-8s for free slot instead of flat 2-min wait
-        this._scheduleSlotPoll();
-        // Hard safety timeout — stop polling after 2 min
-        chrome.alarms.create(STANDBY_ALARM, {
-          delayInMinutes: CONTENTION_STANDBY_TIMEOUT / 60000
-        });
-        return;
-      }
-
-      this.setState('reconnecting');
-      this.scheduleFastRetry();
-    } else {
-      // Normal disconnection after stable connection — reset attempts
-      this.reconnectAttempts = 0;
-      this.fastRetryAttempts = 0;
-      this.setState('reconnecting');
-      this.scheduleReconnect();
-    }
+    this.setState('disconnected');
+    this.scheduleReconnect();
   }
 
-  scheduleReconnect() {
-    this.slotTaken = false;
-    this.fastRetryAttempts = 0;
-    chrome.alarms.clear(FAST_RETRY_ALARM);
-    const base = 1000;
-    const delay = Math.min(base * Math.pow(2, this.reconnectAttempts), MAX_RECONNECT_DELAY);
-    const jittered = Math.round(delay * (0.8 + Math.random() * 0.4));
-    this.reconnectAttempts++;
-
-    setTimeout(() => void this.connect(), jittered);
-
-    // Backup alarm in case SW dies before setTimeout fires
-    chrome.alarms.create(RECONNECT_ALARM, {
-      delayInMinutes: Math.max(jittered / 60000, 0.5)
-    });
-  }
+  // ── Keepalive ──────────────────────────────────────────────────────────────
 
   startKeepalive() {
     chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: KEEPALIVE_INTERVAL_MIN });
@@ -317,143 +217,129 @@ export class RelayConnection {
   }
 
   handleAlarm(alarm) {
+    console.log(`[PKRelay] alarm: ${alarm.name} state=${this.state}`);
     if (alarm.name === KEEPALIVE_ALARM) {
-      if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      if (!this.port) {
         void this.connect();
         return;
       }
-      // Check if last pong is stale (dead connection) — must exceed 2 keepalive cycles
-      const stalePongThreshold = KEEPALIVE_INTERVAL_MIN * 60000 * 2 + PONG_TIMEOUT;
-      if (this.lastPongTime > 0 && Date.now() - this.lastPongTime > stalePongThreshold) {
-        this.ws.close(); // Will trigger onRelayDisconnected
-        return;
-      }
-      this.send({ method: 'ping' });
+      // Send a ping to server.py to keep NM port alive
+      try {
+        this.port.postMessage({ type: 'ping' });
+      } catch {}
     }
     if (alarm.name === RECONNECT_ALARM) {
       if (this.state !== 'connected') void this.connect();
     }
-    if (alarm.name === STANDBY_ALARM) {
-      this.resumeFromStandby();
-    }
-    if (alarm.name === FAST_RETRY_ALARM) {
-      if (this.state !== 'connected') void this.connect();
-    }
   }
 
+  scheduleReconnect() {
+    const base = 1000;
+    const delay = Math.min(base * Math.pow(2, this.reconnectAttempts), MAX_RECONNECT_DELAY);
+    const jittered = Math.round(delay * (0.8 + Math.random() * 0.4));
+    this.reconnectAttempts++;
+
+    setTimeout(() => void this.connect(), jittered);
+    chrome.alarms.create(RECONNECT_ALARM, {
+      delayInMinutes: Math.max(jittered / 60000, 0.5)
+    });
+  }
+
+  // ── State ─────────────────────────────────────────────────────────────────
+
   setState(newState) {
+    if (this.state === newState) return;
     this.state = newState;
     if (this.onStateChange) this.onStateChange(newState);
   }
 
   disconnect() {
     this.stopKeepalive();
-    this._clearSlotPoll();
     chrome.alarms.clear(RECONNECT_ALARM);
-    chrome.alarms.clear(STANDBY_ALARM);
-    chrome.alarms.clear(FAST_RETRY_ALARM);
-    this.standbyReason = null;
-    this.slotTaken = false;
-    this.fastRetryAttempts = 0;
-    // Reject all pending requests
     for (const [id, { reject, timer }] of this.pendingRequests) {
       clearTimeout(timer);
       reject(new Error('Relay disconnected'));
     }
     this.pendingRequests.clear();
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    if (this.port) {
+      try { this.port.disconnect(); } catch {}
+      this.port = null;
     }
     this.setState('disconnected');
   }
 
-  // Yield the gateway slot for a browser switch
+  // ── Compat stubs (hot-swap & standby no longer needed in CDP mode) ─────────
+
+  /**
+   * yieldSlot: no-op in CDP mode. OpenClaw connects directly to the CDP server;
+   * there's no single "slot" to contend over. Kept for API compatibility.
+   */
   async yieldSlot(targetBrowser, requestId, yieldingBrowser) {
-    // Send acknowledgment before disconnecting (skip for popup-initiated switches)
-    if (requestId != null) {
-      this.send({
-        id: requestId,
-        result: {
-          status: 'yielding',
-          yieldingBrowser,
-          targetBrowser,
-          timeoutMs: STANDBY_TIMEOUT
-        }
-      });
-
-      // Brief delay to ensure response is flushed
-      await new Promise(r => setTimeout(r, 100));
-    }
-
-    // Disconnect without triggering onRelayDisconnected
-    this.stopKeepalive();
-    chrome.alarms.clear(RECONNECT_ALARM);
-    chrome.alarms.clear(FAST_RETRY_ALARM);
-    for (const [id, { reject, timer }] of this.pendingRequests) {
-      clearTimeout(timer);
-      reject(new Error('Relay yielded for browser switch'));
-    }
-    this.pendingRequests.clear();
-    if (this.ws) {
-      this.ws.onclose = null; // prevent onRelayDisconnected
-      this.ws.close();
-      this.ws = null;
-    }
-
-    // Enter standby with fast-retry polling
-    this.standbyReason = { targetBrowser, startTime: Date.now() };
-    this.fastRetryAttempts = 0;
-    this.slotTaken = true;
-    this.setState('standby');
-
-    // Safety timeout: force resume if target never connects
-    chrome.alarms.create(STANDBY_ALARM, {
-      delayInMinutes: STANDBY_TIMEOUT / 60000
-    });
-    setTimeout(() => this.resumeFromStandby(), STANDBY_TIMEOUT);
+    console.log('[PKRelay] yieldSlot: hot-swap not needed in CDP mode');
   }
 
   resumeFromStandby() {
     if (this.state !== 'standby') return;
-    this._clearSlotPoll();
-    chrome.alarms.clear(STANDBY_ALARM);
-    chrome.alarms.clear(FAST_RETRY_ALARM);
-    this.standbyReason = null;
-    this.slotTaken = false;
-    this.fastRetryAttempts = 0;
     void this.connect();
   }
 
-  // Poll for free gateway slot during contention standby
-  _scheduleSlotPoll() {
-    this._clearSlotPoll();
-    this._slotPollTimer = setTimeout(() => {
-      if (this.state !== 'standby') return;
-      this.resumeFromStandby();
-    }, 5000 + Math.random() * 3000);
-  }
+  // ── Announce targets to server.py ─────────────────────────────────────────
 
-  _clearSlotPoll() {
-    if (this._slotPollTimer) {
-      clearTimeout(this._slotPollTimer);
-      this._slotPollTimer = null;
+  /**
+   * Called by TabManager when tabs attach/detach.
+   * Sends the current target list to server.py so /json/list stays accurate.
+   */
+  announceTargets(targets) {
+    if (!this.port) return;
+    try {
+      this.port.postMessage({ type: 'targets', targets });
+    } catch (err) {
+      console.warn('[PKRelay] announceTargets failed:', err.message);
     }
   }
 
-  scheduleFastRetry() {
-    const delay = Math.min(
-      1000 * Math.pow(1.5, this.fastRetryAttempts),
-      MAX_FAST_RETRY_DELAY
-    );
-    const jittered = Math.round(delay * (0.8 + Math.random() * 0.4));
-    this.fastRetryAttempts++;
+  /**
+   * Send a CDP response back to server.py, which forwards it to the WS client.
+   * Wraps relay.send() calls (id + result/error) into typed messages.
+   */
+  send(message) {
+    if (!this.port) return;
 
-    setTimeout(() => void this.connect(), jittered);
+    // If this is a response to a CDP command (has id field), wrap it
+    if (message.id != null && ('result' in message || 'error' in message)) {
+      try {
+        this.port.postMessage({
+          type: 'cdpResponse',
+          nmId: message.id,
+          result: message.result,
+          error: message.error
+        });
+      } catch (err) {
+        console.warn('[PKRelay] NM send (cdpResponse) failed:', err.message);
+      }
+      return;
+    }
 
-    // Backup alarm for SW persistence
-    chrome.alarms.create(FAST_RETRY_ALARM, {
-      delayInMinutes: Math.max(jittered / 60000, 0.5)
-    });
+    // CDP events (forwardCDPEvent from tabs.js): wrap as cdpEvent
+    if (message.method === 'forwardCDPEvent') {
+      try {
+        this.port.postMessage({
+          type: 'cdpEvent',
+          sessionId: message.params?.sessionId,
+          method: message.params?.method,
+          params: message.params?.params
+        });
+      } catch (err) {
+        console.warn('[PKRelay] NM send (cdpEvent) failed:', err.message);
+      }
+      return;
+    }
+
+    // Generic fallback
+    try {
+      this.port.postMessage(message);
+    } catch (err) {
+      console.warn('[PKRelay] NM send failed:', err.message);
+    }
   }
 }

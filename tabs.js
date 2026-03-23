@@ -1,4 +1,5 @@
-// tabs.js — Tab attachment, session management, CDP event forwarding
+// tabs.js — Tab attachment, session management, CDP event forwarding (v2.0)
+// Transport: native messaging → server.py CDP bridge → OpenClaw
 
 export class TabManager {
   constructor(relay) {
@@ -77,7 +78,7 @@ export class TabManager {
     this.tabs.set(tabId, tabState);
     this.tabBySession.set(sessionId, tabId);
 
-    // Notify relay — must match stock OpenClaw extension format exactly
+    // Notify relay — sends Target.attachedToTarget event to server.py
     this.relay.send({
       method: 'forwardCDPEvent',
       params: {
@@ -91,6 +92,7 @@ export class TabManager {
     });
 
     await this.persistState();
+    this._announceTargets(); // Update /json/list in server.py
     if (this.onTabChange) this.onTabChange(tabId, true);
     return tabState;
   }
@@ -130,6 +132,7 @@ export class TabManager {
     try { await chrome.debugger.detach({ tabId }); } catch {}
 
     await this.persistState();
+    this._announceTargets(); // Update /json/list in server.py
     if (this.onTabChange) this.onTabChange(tabId, false);
   }
 
@@ -398,7 +401,7 @@ export class TabManager {
   }
 
   async reannounceAll() {
-    // Called after relay reconnection
+    // Called after relay reconnection or when a new CDP client connects
     for (const [tabId, state] of this.tabs) {
       try {
         const tab = await chrome.tabs.get(tabId);
@@ -432,6 +435,43 @@ export class TabManager {
       }
     }
     await this.persistState();
+    this._announceTargets(); // Sync /json/list in server.py
+  }
+
+  /**
+   * Build and send the current target list to server.py so /json/list
+   * reflects the currently attached tabs. Also stores sessionId on each
+   * target so server.py can route events to the right WS connection.
+   */
+  _announceTargets() {
+    const targets = [];
+    for (const [tabId, state] of this.tabs) {
+      targets.push({
+        targetId: state.targetId,
+        type: 'page',
+        title: '',   // Will be filled in on next reannounce
+        url: '',
+        sessionId: state.sessionId,
+        tabId
+      });
+    }
+    // Fire-and-forget async enrichment
+    void this._announceTargetsEnriched(targets);
+  }
+
+  async _announceTargetsEnriched(targets) {
+    const enriched = [];
+    for (const t of targets) {
+      try {
+        const tab = await chrome.tabs.get(t.tabId);
+        enriched.push({ ...t, title: tab.title || '', url: tab.url || '' });
+      } catch {
+        enriched.push(t);
+      }
+    }
+    if (typeof this.relay.announceTargets === 'function') {
+      this.relay.announceTargets(enriched);
+    }
   }
 
   async persistState() {

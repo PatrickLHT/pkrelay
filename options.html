@@ -205,7 +205,7 @@
 </head>
 <body>
   <h1>PKRelay Settings</h1>
-  <p class="subtitle">Configure your browser relay connection</p>
+  <p class="subtitle">Configure your CDP server bridge (v2.0)</p>
 
   <div class="form-group">
     <label for="browserName">Browser Name</label>
@@ -214,23 +214,21 @@
   </div>
 
   <div class="form-group">
-    <label for="relayPort">Relay Port</label>
-    <input type="number" id="relayPort" min="1" max="65535" placeholder="18792">
-    <p class="help">The OpenClaw gateway relay port (default: 18792)</p>
+    <label for="cdpServerPort">CDP Server Port</label>
+    <input type="number" id="cdpServerPort" min="1" max="65535" placeholder="18792">
+    <p class="help">Port where PKRelay's CDP bridge server listens (default: 18792). Must match <code>cdpUrl</code> in OpenClaw config.</p>
   </div>
 
   <div class="form-group">
-    <label for="relayToken">Relay Auth Token</label>
-    <input type="text" id="relayToken" placeholder="Paste gateway or derived token">
-    <p class="help">From <code>gateway.auth.token</code> in openclaw.json, or the derived relay token</p>
-    <p class="help" id="tokenAutoStatus"></p>
+    <label>CDP Bridge Status</label>
+    <p class="help" id="nmStatus" style="margin-top: 4px;">Checking native host…</p>
   </div>
 
   <div class="form-group">
     <label class="checkbox-label">
       <input type="checkbox" id="isDefault"> Default Browser
     </label>
-    <p class="help">Mark this as the preferred browser. The agent sees this label to know which browser to return to.</p>
+    <p class="help">Mark this as the preferred browser for the agent.</p>
   </div>
 
   <div class="form-group">
@@ -241,18 +239,19 @@
 
   <div class="btn-row">
     <button class="btn-primary" id="saveBtn">Save</button>
-    <button class="btn-secondary" id="testBtn">Test Connection</button>
+    <button class="btn-secondary" id="testBtn">Test CDP Server</button>
     <span id="healthStatus"></span>
   </div>
 
   <div class="guide">
     <h2>Getting Started</h2>
     <ol>
-      <li>Start the OpenClaw gateway: <code>openclaw gateway restart</code></li>
+      <li>Install the CDP bridge: <code>cd ~/pkrelay &amp;&amp; ./install.sh</code></li>
       <li>Set your browser name above (e.g., "Arc")</li>
-      <li>Click <strong>Test Connection</strong> to verify</li>
+      <li>Click <strong>Test CDP Server</strong> to verify: <code>http://127.0.0.1:18792/json/version</code></li>
       <li>Click the PKRelay icon in the toolbar to manage tab permissions</li>
       <li>Attach tabs by clicking the green/gray dot next to each tab in the popup</li>
+      <li>OpenClaw config should have: <code>"cdpUrl": "http://127.0.0.1:18792"</code></li>
     </ol>
   </div>
 

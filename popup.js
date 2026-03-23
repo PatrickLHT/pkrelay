@@ -32,7 +32,7 @@ function render(state) {
 
   // Info
   $('#browserName').textContent = state.browserName;
-  $('#relayUrl').textContent = state.relayUrl;
+  $('#relayUrl').textContent = state.cdpServerUrl || state.relayUrl || '';
 
   // Standby banner
   const banner = $('#standbyBanner');

@@ -1,4 +1,5 @@
-// background.js — PKRelay service worker entry point
+// background.js — PKRelay service worker entry point (v2.0 CDP Server mode)
+// Transport: native messaging → server.py CDP bridge → OpenClaw
 import { RelayConnection } from './relay.js';
 import { TabManager } from './tabs.js';
 import { PermissionManager } from './permissions.js';
@@ -98,6 +99,11 @@ relay.onStateChange = (state) => {
     autoAttachActiveTab();
   }
 };
+
+// When a new CDP client connects to server.py, re-announce all attached tabs
+relay.on('_clientConnected', () => {
+  tabMgr.reannounceAll();
+});
 
 // Auto-attach the active tab on connect — only if permission is "full".
 // Skips "ask" tabs (would block forever waiting for popup approval).
@@ -317,7 +323,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       sendResponse({
         connectionState: relay.state,
         browserName: stored.browserName || 'Browser',
-        relayUrl: `ws://127.0.0.1:${relay.port}/extension`,
+        cdpServerUrl: `http://127.0.0.1:${relay.cdpPort}`,
+        // Keep relayUrl for popup.js compat (it displays this field)
+        relayUrl: `http://127.0.0.1:${relay.cdpPort}/json`,
         browserLevel: perms.browserLevel,
         standbyReason: relay.standbyReason,
         knownBrowsers: stored.knownBrowsers || [],

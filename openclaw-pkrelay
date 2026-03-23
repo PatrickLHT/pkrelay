@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="/Users/patrickkelly/pkrelay"
+OPENCLAW_BIN="${OPENCLAW_BIN:-$(command -v openclaw)}"
+SESSION_KEY="${OPENCLAW_PKRELAY_SESSION:-project:pkrelay:main}"
+HISTORY_LIMIT="${OPENCLAW_PKRELAY_HISTORY_LIMIT:-200}"
+
+if [ -z "${OPENCLAW_BIN:-}" ]; then
+    echo "openclaw not found in PATH" >&2
+    exit 1
+fi
+
+cd "$REPO_ROOT"
+
+echo "Workspace: $REPO_ROOT"
+echo "Session:   $SESSION_KEY"
+echo ""
+
+if [ -x "$REPO_ROOT/.clawdbot/scripts/resume-initiative.sh" ]; then
+    "$REPO_ROOT/.clawdbot/scripts/resume-initiative.sh" || true
+    echo ""
+fi
+
+echo "Launching OpenClaw TUI..."
+exec "$OPENCLAW_BIN" tui --session "$SESSION_KEY" --history-limit "$HISTORY_LIMIT" "$@"
