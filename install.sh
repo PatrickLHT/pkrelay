@@ -111,6 +111,8 @@ cat > "$LAUNCHD_PLIST" << EOF
   </array>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>PYTHONDONTWRITEBYTECODE</key>
+    <string>1</string>
     <key>PKRELAY_PORT</key>
     <string>18792</string>
     <key>PKRELAY_STANDALONE</key>
