@@ -106,7 +106,7 @@ cat > "$LAUNCHD_PLIST" << EOF
   <string>${LAUNCHD_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
+    <string>/opt/homebrew/bin/python3</string>
     <string>${SERVER_PATH}</string>
   </array>
   <key>EnvironmentVariables</key>
